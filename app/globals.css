@@ -13,7 +13,7 @@ html, body { margin: 0; padding: 0; }
 }
 .inner { max-width:1080px; margin:0 auto; padding:22px 20px 60px; }
 .topbar { display:flex; align-items:center; justify-content:space-between; padding-bottom:26px; }
-.logo { height:84px; width:auto; display:block; border-radius:6px; }
+.logo-text { font-family:'Fraunces',serif; font-weight:600; font-size:30px; color:var(--brand); letter-spacing:.005em; }
 .topbar .tag { font-size:12.5px; color:var(--muted); }
 
 .hero h1 {
