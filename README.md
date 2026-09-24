@@ -37,9 +37,9 @@ allows function timeouts of 60s — Vercel Hobby caps some functions lower; Pro 
 
 | Model                    | ~ per render | Use it for                         |
 |--------------------------|--------------|------------------------------------|
-| `gemini-2.5-flash-image` | ~$0.039      | Default — high-volume cold traffic |
+| `gemini-2.5-flash-image` | ~$0.039      | Cheapest — high-volume cold traffic |
 | `gemini-3.1-flash-image` | ~$0.10       | Higher quality                     |
-| `gemini-3-pro-image`     | ~$0.134      | Hero / premium "HD render"         |
+| `gemini-3-pro-image`     | ~$0.134      | Default — best quality             |
 
 Switch via `GEMINI_IMAGE_MODEL`. Chat text (`gemini-3.6-flash`) is a fraction of a cent.
 
