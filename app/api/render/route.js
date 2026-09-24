@@ -7,6 +7,14 @@ const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image";
 const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-3.6-flash";
 
+// The best image model is often overloaded (503). Retry it once, then fall back to the
+// next-best models so the customer still gets a render.
+const FALLBACK_MODELS = ["gemini-3.1-flash-image", "gemini-2.5-flash-image"];
+const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const START_CUTOFF_MS = 35000; // don't start a new attempt this late; maxDuration is 60s
+const BUSY_MESSAGE = "Our image designer is very busy right now. Please try again in a minute.";
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
 // Image models tend to default to white joinery, so the finish is stated first and
 // spelled out for every part of the wardrobe.
 function finishLine(finish) {
@@ -106,6 +114,7 @@ const inline = (dataUrl, fallbackMime) => ({
 });
 
 export async function POST(request) {
+  const started = Date.now();
   try {
     const { imageBase64, mimeType = "image/jpeg", brief = "", messages = [], baseRender } = await request.json();
     if (!imageBase64) return Response.json({ error: "Missing image" }, { status: 400 });
@@ -124,18 +133,40 @@ export async function POST(request) {
     // Visible in the host's function logs, to check what the image model was asked for.
     console.log("[render]", JSON.stringify({ rerender: !!baseRender, finish, spec }));
 
-    const r = await fetch(`${API_BASE}/${MODEL}:generateContent?key=${key}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts }], generationConfig: { responseModalities: ["TEXT", "IMAGE"] } }),
-    });
-    const j = await r.json();
-    if (!r.ok) return Response.json({ error: j?.error?.message || "Gemini error" }, { status: r.status });
-
+    const attempts = [MODEL, MODEL, ...FALLBACK_MODELS.filter((m) => m !== MODEL)];
+    const body = JSON.stringify({ contents: [{ parts }], generationConfig: { responseModalities: ["TEXT", "IMAGE"] } });
     let out = null;
-    for (const c of j.candidates || [])
-      for (const p of c.content?.parts || []) if (p.inlineData) out = p.inlineData.data;
-    if (!out) return Response.json({ error: "No image returned" }, { status: 502 });
+    let lastError = BUSY_MESSAGE;
+
+    for (let i = 0; i < attempts.length && !out; i++) {
+      if (Date.now() - started > START_CUTOFF_MS) break;
+      if (i === 1) await sleep(1500); // brief pause before retrying the same model
+      const model = attempts[i];
+      try {
+        const r = await fetch(`${API_BASE}/${model}:generateContent?key=${key}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        const j = await r.json();
+        if (!r.ok) {
+          console.log("[render] attempt failed", JSON.stringify({ model, status: r.status, error: j?.error?.message }));
+          if (!RETRYABLE.has(r.status)) return Response.json({ error: j?.error?.message || "Gemini error" }, { status: r.status });
+          continue;
+        }
+        for (const c of j.candidates || [])
+          for (const p of c.content?.parts || []) if (p.inlineData) out = p.inlineData.data;
+        if (!out) {
+          console.log("[render] attempt failed", JSON.stringify({ model, error: "no image returned" }));
+          lastError = "No image came back. Please try again.";
+        } else if (model !== MODEL) {
+          console.log("[render] used fallback model", model);
+        }
+      } catch (e) {
+        console.log("[render] attempt failed", JSON.stringify({ model, error: String(e) }));
+      }
+    }
+    if (!out) return Response.json({ error: lastError }, { status: 503 });
 
     return Response.json({ imageBase64: `data:image/png;base64,${out}` });
   } catch (e) {
