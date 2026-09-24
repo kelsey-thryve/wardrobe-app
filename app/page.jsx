@@ -141,7 +141,7 @@ export default function Page() {
     <div className="wrap">
       <div className="inner">
         <div className="topbar">
-          <img className="logo" src="/logo.png" alt="Boston Wardrobes" />
+          <div className="logo-text">Thryve Growth</div>
           <div className="tag">Bespoke fitted wardrobes · designed to your room</div>
         </div>
 

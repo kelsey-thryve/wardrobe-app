@@ -1,7 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Boston Wardrobes — design your fitted wardrobe",
+  title: "Thryve Growth wardrobe app",
   description: "Upload your space, shape the design, and get a quote from the studio that builds it.",
 };
 
