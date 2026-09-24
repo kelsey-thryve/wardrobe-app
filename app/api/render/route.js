@@ -4,7 +4,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60; // renders can take 10-30s
 
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
-const MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image";
+const MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image";
 const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-3.6-flash";
 
 // Image models tend to default to white joinery, so the finish is stated first and
