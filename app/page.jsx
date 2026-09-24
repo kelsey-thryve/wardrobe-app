@@ -73,7 +73,13 @@ export default function Page() {
       const res = await fetch("/api/render", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: photo, mimeType: "image/jpeg", brief: fullBrief() }),
+        body: JSON.stringify({
+          imageBase64: photo,
+          mimeType: "image/jpeg",
+          brief: fullBrief(),
+          messages,
+          baseRender: renderImg,
+        }),
       });
       const data = await res.json();
       if (data.imageBase64) setRenderImg(data.imageBase64);
