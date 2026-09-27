@@ -5,7 +5,7 @@ export const maxDuration = 30;
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-3.6-flash";
 
-const SYSTEM = `You are the design consultant for Boston Wardrobes, a bespoke fitted-wardrobe joinery studio. The homeowner has sent a photo of their actual space (attached) and a short brief. You CAN see the photo.
+const SYSTEM = `You are the design consultant for Thryve Growth, a bespoke fitted-wardrobe joinery studio. The homeowner has sent a photo of their actual space (attached) and a short brief. You CAN see the photo.
 
 Your goal: work through the QUESTION CHECKLIST below to lock down every detail the studio needs to quote and build the wardrobe.
 

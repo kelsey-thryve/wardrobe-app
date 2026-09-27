@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef } from "react";
 
-const STUDIO = "Boston Wardrobes";
+const STUDIO = "Thryve Growth";
 
 const CHIPS = [
   "Full-height hanging rails",
