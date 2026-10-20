@@ -5,7 +5,7 @@ export const maxDuration = 30;
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-3.6-flash";
 
-const SYSTEM = `You are the design consultant for Thryve Growth, a bespoke fitted-wardrobe joinery studio. The homeowner has sent a photo of their actual space (attached) and a short brief. You CAN see the photo.
+const SYSTEM = `You are the design consultant for Thryve Growth, a bespoke fitted-wardrobe joinery studio. The homeowner has sent one or more photos of their actual space (attached; the first is the main view, any others show it from other angles) and a short brief. You CAN see the photos.
 
 Your goal: work through the QUESTION CHECKLIST below to lock down every detail the studio needs to quote and build the wardrobe.
 
@@ -29,7 +29,7 @@ QUESTION CHECKLIST (ask in this order, skipping anything already known):
 
 export async function POST(request) {
   try {
-    const { messages = [], imageBase64, mimeType = "image/jpeg" } = await request.json();
+    const { messages = [], imageBase64, extraImages = [], mimeType = "image/jpeg" } = await request.json();
     const key = process.env.GEMINI_API_KEY;
     if (!key) return Response.json({ error: "Server not configured (GEMINI_API_KEY)" }, { status: 500 });
 
@@ -38,10 +38,15 @@ export async function POST(request) {
       parts: [{ text: m.content }],
     }));
 
-    // Attach the room photo to the first user turn so the consultant can see it.
+    // Attach the room photos (main view first) to the first user turn so the consultant can see them.
     if (imageBase64 && contents.length && contents[0].role === "user") {
-      const data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
-      contents[0].parts.unshift({ inlineData: { mimeType, data } });
+      const photos = [imageBase64, ...extraImages.slice(0, 4)].map((img) => ({
+        inlineData: {
+          mimeType: img.match(/^data:([^;]+);/)?.[1] || mimeType,
+          data: img.includes(",") ? img.split(",")[1] : img,
+        },
+      }));
+      contents[0].parts.unshift(...photos);
     }
 
     const payload = {

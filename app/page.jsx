@@ -3,6 +3,8 @@ import { useState, useRef } from "react";
 
 const STUDIO = "Thryve Growth";
 
+const MAX_PHOTOS = 5;
+const RENDER_EXTRA_PHOTOS = 2; // extra views sent with a render; keeps the request under the host's size limit
 const CHIPS = [
   "Full-height hanging rails",
   "Bank of soft-close drawers",
@@ -13,7 +15,8 @@ const CHIPS = [
 ];
 
 export default function Page() {
-  const [photo, setPhoto] = useState(null);
+  const [photos, setPhotos] = useState([]); // first photo is the main view the render is built on
+  const photo = photos[0] || null;
   const [brief, setBrief] = useState("");
   const [picked, setPicked] = useState([]);
   const [stage, setStage] = useState("intake"); // intake | design | quote | done
@@ -26,35 +29,47 @@ export default function Page() {
   const [lead, setLead] = useState({ name: "", email: "", phone: "", suburb: "" });
   const fileRef = useRef(null);
 
-  const onFile = (e) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    const r = new FileReader();
-    r.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const max = 1280;
-        let { width, height } = img;
-        if (Math.max(width, height) > max) {
-          const s = max / Math.max(width, height);
-          width = Math.round(width * s);
-          height = Math.round(height * s);
-        }
-        const c = document.createElement("canvas");
-        c.width = width;
-        c.height = height;
-        c.getContext("2d").drawImage(img, 0, 0, width, height);
-        try {
-          setPhoto(c.toDataURL("image/jpeg", 0.9));
-        } catch {
-          setPhoto(r.result);
-        }
+  // Shrink a photo to a JPEG data URL so several fit in one request.
+  const compress = (f) =>
+    new Promise((resolve) => {
+      const r = new FileReader();
+      r.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          const max = 1280;
+          let { width, height } = img;
+          if (Math.max(width, height) > max) {
+            const s = max / Math.max(width, height);
+            width = Math.round(width * s);
+            height = Math.round(height * s);
+          }
+          const c = document.createElement("canvas");
+          c.width = width;
+          c.height = height;
+          c.getContext("2d").drawImage(img, 0, 0, width, height);
+          try {
+            resolve(c.toDataURL("image/jpeg", 0.85));
+          } catch {
+            resolve(r.result);
+          }
+        };
+        img.onerror = () => resolve(r.result);
+        img.src = r.result;
       };
-      img.onerror = () => setPhoto(r.result);
-      img.src = r.result;
-    };
-    r.readAsDataURL(f);
+      r.onerror = () => resolve(null);
+      r.readAsDataURL(f);
+    });
+
+  const onFile = async (e) => {
+    const files = [...(e.target.files || [])].slice(0, MAX_PHOTOS - photos.length);
+    e.target.value = ""; // let the same file be picked again
+    if (!files.length) return;
+    const added = (await Promise.all(files.map(compress))).filter(Boolean);
+    setPhotos((ps) => [...ps, ...added].slice(0, MAX_PHOTOS));
   };
+
+  const removePhoto = (i) => setPhotos((ps) => ps.filter((_, j) => j !== i));
+  const makeMain = (i) => setPhotos((ps) => [ps[i], ...ps.filter((_, j) => j !== i)]);
 
   const toggleChip = (c) =>
     setPicked((p) => (p.includes(c) ? p.filter((x) => x !== c) : [...p, c]));
@@ -75,6 +90,7 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           imageBase64: photo,
+          extraImages: photos.slice(1, 1 + RENDER_EXTRA_PHOTOS),
           mimeType: "image/jpeg",
           brief: fullBrief(),
           messages,
@@ -95,7 +111,7 @@ export default function Page() {
       const res = await fetch("/api/design", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: msgs, imageBase64: photo }),
+        body: JSON.stringify({ messages: msgs, imageBase64: photo, extraImages: photos.slice(1) }),
       });
       const data = await res.json();
       return data.text || "Tell me a bit more about the space — wall width and ceiling height are the two the studio needs first.";
@@ -109,7 +125,7 @@ export default function Page() {
     setStage("design");
     setThinking(true);
     runRender(); // fire the image in parallel
-    const opener = [{ role: "user", content: `Here is my brief: ${fullBrief()}. The attached photo is the actual space this wardrobe will be fitted into.` }];
+    const opener = [{ role: "user", content: `Here is my brief: ${fullBrief()}. ${photos.length > 1 ? `The ${photos.length} attached photos show the actual space this wardrobe will be fitted into; the first is the main view.` : "The attached photo is the actual space this wardrobe will be fitted into."}` }];
     const reply = await askDesigner(opener);
     setMessages([{ role: "assistant", content: reply }]);
     setThinking(false);
@@ -123,7 +139,7 @@ export default function Page() {
     setInput("");
     setThinking(true);
     const history = [
-      { role: "user", content: `Here is my brief: ${fullBrief()}. The attached photo is the actual space.` },
+      { role: "user", content: `Here is my brief: ${fullBrief()}. ${photos.length > 1 ? `The ${photos.length} attached photos show the actual space; the first is the main view.` : "The attached photo is the actual space."}` },
       ...next,
     ];
     const reply = await askDesigner(history);
@@ -155,7 +171,7 @@ export default function Page() {
           <div className="hero">
             <h1>Your wardrobe, drawn to fit.</h1>
             <p className="sub">
-              Upload a photo of your space, shape the layout with our studio designer, and see it
+              Upload photos of your space, shape the layout with our studio designer, and see it
               in your own room. When it's right, request a quote from the joiners who'll build it.
             </p>
           </div>
@@ -171,10 +187,28 @@ export default function Page() {
                   <>
                     <div className="ico">+</div>
                     <div>Tap to upload a photo of your wall, alcove or closet</div>
+                    <div style={{ fontSize: 12 }}>Add a few angles if you can</div>
                   </>
                 )}
               </div>
-              <input ref={fileRef} type="file" accept="image/*" onChange={onFile} style={{ display: "none" }} />
+              {photos.length > 0 && (
+                <div className="thumbs">
+                  {photos.map((p, i) => (
+                    <div key={i} className={"thumb" + (i === 0 ? " main" : "")}>
+                      <img src={p} alt={i === 0 ? "Main view" : `Extra view ${i}`} onClick={() => i > 0 && makeMain(i)} title={i === 0 ? "Main view" : "Make this the main view"} />
+                      {i === 0 && <span className="tag">Main</span>}
+                      <button className="x" onClick={() => removePhoto(i)} aria-label="Remove photo">×</button>
+                    </div>
+                  ))}
+                  {photos.length < MAX_PHOTOS && (
+                    <button className="thumb add" onClick={() => fileRef.current?.click()}>+ Add</button>
+                  )}
+                </div>
+              )}
+              <p className="footnote" style={{ textAlign: "left", marginTop: 8 }}>
+                Add up to {MAX_PHOTOS} photos from different angles. The main photo is the view we design on; tap another photo to make it the main one.
+              </p>
+              <input ref={fileRef} type="file" accept="image/*" multiple onChange={onFile} style={{ display: "none" }} />
             </div>
             <div className="col">
               <div className="stepnum">Step two</div>
@@ -253,7 +287,7 @@ export default function Page() {
             <input className="field" placeholder="Phone (optional)" value={lead.phone} onChange={(e) => setLead({ ...lead, phone: e.target.value })} />
             <input className="field" placeholder="Suburb (optional)" value={lead.suburb} onChange={(e) => setLead({ ...lead, suburb: e.target.value })} />
             <button className="cta brass" disabled={!lead.name || !lead.email} onClick={submitLead}>Send my design to the studio</button>
-            <p className="footnote" style={{ marginTop: 12 }}>Your photo, render and notes go straight to the workshop so they can price the exact build.</p>
+            <p className="footnote" style={{ marginTop: 12 }}>Your photos, render and notes go straight to the workshop so they can price the exact build.</p>
           </div>
         )}
 
