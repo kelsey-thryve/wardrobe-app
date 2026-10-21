@@ -36,6 +36,39 @@ function finishLine(finish) {
 const MAX_EXTRA_PHOTOS = 2; // other views of the room, for context
 const MAX_WALL_PHOTOS = 5; // walk-in mode: every wall photo is sent (downsized by the browser)
 
+// Real measurements from the customer (mm). They fix the size of the room and the joinery,
+// because the image model otherwise tends to make rooms bigger than they are.
+const mm = (n) => `${Math.round(n)}mm`;
+const validMm = (n) => (Number.isFinite(n) && n >= 300 && n <= 15000 ? n : null);
+
+const SCALE_RULE =
+  "SCALE: keep the room exactly the size it is in the photos. Do not lengthen walls, raise " +
+  "the ceiling, widen or deepen the room, or add floor space, and do not add wardrobe " +
+  "sections that would not fit.\n\n";
+
+function sizeLine(width, ceiling, depth) {
+  const w = validMm(width), h = validMm(ceiling), d = validMm(depth);
+  if (!w && !h && !d) return SCALE_RULE;
+  const facts = [
+    w && `the wall is ${mm(w)} wide from corner to corner`,
+    h && `the ceiling is ${mm(h)} high`,
+    d && `the room is ${mm(d)} deep from the doorway to the back wall`,
+  ].filter(Boolean).join(", ");
+  // A typical wardrobe section is 450-900mm wide; give the model a sensible split to draw.
+  const bays = w ? Math.max(1, Math.round(w / 800)) : 0;
+  const fit = [
+    w && `split the wall into ${bays} section${bays > 1 ? "s" : ""} of about ${mm(w / bays)} each`,
+    h && `run the joinery up to ${mm(h)}`,
+    "hanging sections are about 600mm deep",
+    d && `leave the rest of the ${mm(d)} depth as clear floor`,
+  ].filter(Boolean).join(", ");
+  return (
+    `MEASUREMENTS (exact, the real room): ${facts}. Draw everything to this scale: ${fit}. ` +
+    "A standard door is about 2040mm tall and 820mm wide; use that to keep proportions right.\n" +
+    SCALE_RULE
+  );
+}
+
 // Images 2..n+1: other photos of the same room, to help the model understand it.
 function extraLine(n) {
   if (!n) return "";
@@ -47,7 +80,7 @@ function extraLine(n) {
   );
 }
 
-function buildPrompt(spec, finish, extras = 0) {
+function buildPrompt(spec, finish, extras = 0, size = SCALE_RULE) {
   return (
     "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
     "joinery studio. Using image 1, the photograph of the customer's actual room, as the " +
@@ -57,6 +90,7 @@ function buildPrompt(spec, finish, extras = 0) {
     "the room or move anything. Only add the wardrobe joinery, seamlessly integrated and " +
     "correctly scaled to the space, with realistic shadows and materials.\n\n" +
     extraLine(extras) +
+    size +
     finishLine(finish) +
     `Wardrobe specification from the customer: ${spec}\n\n` +
     "Render as a single photorealistic image, same camera angle as image 1."
@@ -65,7 +99,7 @@ function buildPrompt(spec, finish, extras = 0) {
 
 // Re-render: start again from the room photo, using the previous render only as a layout
 // guide. Asking the model to edit the previous render tends to return it unchanged.
-function buildRerenderPrompt(spec, finish, extras = 0) {
+function buildRerenderPrompt(spec, finish, extras = 0, size = SCALE_RULE) {
   const concept = 2 + extras;
   return (
     "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
@@ -76,6 +110,7 @@ function buildRerenderPrompt(spec, finish, extras = 0) {
     "cubes, drawers and shoe racks sit). The materials, colour, doors and lighting MUST " +
     `follow the specification below, NOT image ${concept} — the customer has changed them.\n\n` +
     extraLine(extras) +
+    size +
     finishLine(finish) +
     `Final wardrobe specification: ${spec}\n\n` +
     "Render as a single photorealistic image, same camera angle as image 1."
@@ -88,7 +123,7 @@ function wallPlanLine(plan) {
   return plan ? `What this wall holds (follow this): ${plan}\n\n` : "";
 }
 
-function buildWallPrompt(spec, finish, wall, walls, others, plan, hasConcept) {
+function buildWallPrompt(spec, finish, wall, walls, others, plan, hasConcept, size = SCALE_RULE) {
   const concept = 2 + others;
   return (
     "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
@@ -98,33 +133,46 @@ function buildWallPrompt(spec, finish, wall, walls, others, plan, hasConcept) {
       "matches across walls and the corners line up. " : "") +
     "Render a FACE-ON view of the wall in image 1 with its custom fitted wardrobe built in: " +
     "camera centred and square to the wall at standing eye height, vertical lines straight, " +
-    "the whole wall in frame from floor to ceiling. Keep the wall's real width, height, " +
+    "the whole wall in frame from floor to ceiling. Show exactly the same stretch of wall as " +
+    "image 1, squared up, and nothing beyond its corners. Keep the wall's real width, height, " +
     "windows, doors, sloped ceiling, skirting, flooring and lighting from image 1. " +
     (hasConcept ? `Image ${concept} is an earlier face-on concept of this wall: use it ONLY as a ` +
       "guide to the layout; the materials, colour, doors and lighting MUST follow the " +
       "specification below — the customer may have changed them. " : "") +
     "\n\n" +
     wallPlanLine(plan) +
+    size +
     finishLine(finish) +
     `Wardrobe specification for the whole room: ${spec}\n\n` +
     "Render as a single photorealistic image."
   );
 }
 
-function buildWidePrompt(spec, finish, walls, hasConcept) {
+// Room view: the main photo's camera angle with every visible wall fitted out. The finished
+// face-on wall renders are the references, so the view matches them and can't come back empty.
+function buildWidePrompt(spec, finish, wallRefs, hasConcept, size = SCALE_RULE) {
+  const refs = wallRefs.length
+    ? wallRefs.map((w, i) => `Image ${i + 2} is the approved face-on design for wall ${w}.`).join(" ") + " "
+    : "";
+  const concept = 2 + wallRefs.length;
   return (
     "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
-    `joinery studio. Images 1 to ${walls} are photos of each wall of the customer's room, in ` +
-    "order. Render ONE wide-angle view of the whole room fitted out, as if standing in the " +
-    "doorway looking in, showing as many walls as possible. Keep the room's real shape, " +
-    "size, windows, doors, ceiling and flooring from the photos. Every wall's joinery must " +
-    "match its own face-on design and share one consistent finish. " +
-    (hasConcept ? `Image ${walls + 1} is an earlier wide concept: use it ONLY as a guide to the ` +
-      "layout; the materials, colour, doors and lighting MUST follow the specification below. " : "") +
+    "joinery studio. Image 1 is a photograph of the customer's actual room. " + refs +
+    "Render the room in image 1 from exactly the same camera angle, with the custom fitted " +
+    "wardrobe joinery built onto every wall that can be seen in it" +
+    (wallRefs.length ? ", matching the approved wall designs (layout, finish, doors, handles and " +
+      "lighting). " : ", following the specification below. ") +
+    "The result MUST clearly show the new fitted wardrobes: returning image 1 unchanged, or " +
+    "with only small changes, is wrong. Keep the room's real geometry, perspective, windows, " +
+    "doors, ceiling, flooring and natural light exactly as photographed. " +
+    (hasConcept ? `Image ${concept} is an earlier concept of this view: use it ONLY as a guide to ` +
+      "the layout; the materials, colour, doors and lighting MUST follow the designs and " +
+      "specification. " : "") +
     "\n\n" +
+    size +
     finishLine(finish) +
     `Wardrobe specification for the whole room: ${spec}\n\n` +
-    "Render as a single photorealistic image."
+    "Render as a single photorealistic image, same camera angle as image 1."
   );
 }
 
@@ -198,6 +246,7 @@ export async function POST(request) {
       imageBase64, extraImages = [], mimeType = "image/jpeg", brief = "", messages = [], baseRender,
       // Walk-in mode: "specOnly" returns the shared spec; "wall" and "wide" render one view of it.
       specOnly = false, view = "match", wall = 1, walls = 1, spec: givenSpec, finish: givenFinish, wallPlan,
+      dims = {}, wallRefs = [],
     } = await request.json();
 
     const key = process.env.GEMINI_API_KEY;
@@ -218,15 +267,21 @@ export async function POST(request) {
     const extras = extraImages.slice(0, view === "match" ? MAX_EXTRA_PHOTOS : MAX_WALL_PHOTOS - 1);
     const parts = [inline(imageBase64, mimeType), ...extras.map((img) => inline(img, mimeType))];
     if (baseRender) parts.push(inline(baseRender, "image/png"));
+    const widths = Array.isArray(dims.widths) ? dims.widths.map(Number) : [];
+    const ceiling = Number(dims.ceiling), depth = Number(dims.depth);
+    const wallSizes = widths.map((w, i) => (validMm(w) ? `wall ${i + 1} is ${mm(w)} wide` : null)).filter(Boolean);
+    const size = view === "wide"
+      ? (wallSizes.length ? `WALL WIDTHS (exact): ${wallSizes.join(", ")}.\n` : "") + sizeLine(undefined, ceiling, depth)
+      : sizeLine(widths[view === "wall" ? wall - 1 : 0], ceiling, depth);
     const prompt =
-      view === "wall" ? buildWallPrompt(spec, finish, wall, walls, extras.length, wallPlan, !!baseRender)
-      : view === "wide" ? buildWidePrompt(spec, finish, 1 + extras.length, !!baseRender)
-      : baseRender ? buildRerenderPrompt(spec, finish, extras.length)
-      : buildPrompt(spec, finish, extras.length);
+      view === "wall" ? buildWallPrompt(spec, finish, wall, walls, extras.length, wallPlan, !!baseRender, size)
+      : view === "wide" ? buildWidePrompt(spec, finish, wallRefs.slice(0, extras.length), !!baseRender, size)
+      : baseRender ? buildRerenderPrompt(spec, finish, extras.length, size)
+      : buildPrompt(spec, finish, extras.length, size);
     parts.push({ text: prompt });
 
     // Visible in the host's function logs, to check what the image model was asked for.
-    console.log("[render]", JSON.stringify({ view, wall, walls, rerender: !!baseRender, extraPhotos: extras.length, finish, wallPlan, spec }));
+    console.log("[render]", JSON.stringify({ view, wall, walls, dims, wallRefs, rerender: !!baseRender, extraPhotos: extras.length, finish, wallPlan, spec }));
 
     const attempts = [MODEL, MODEL, ...FALLBACK_MODELS.filter((m) => m !== MODEL)];
     const body = JSON.stringify({ contents: [{ parts }], generationConfig: { responseModalities: ["TEXT", "IMAGE"] } });

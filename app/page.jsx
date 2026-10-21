@@ -7,6 +7,14 @@ const MAX_PHOTOS = 5;
 const RENDER_EXTRA_PHOTOS = 2; // extra views sent with a render; keeps the request under the host's size limit
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Read a measurement in mm; small numbers are taken as metres ("2.4" -> 2400).
+const toMm = (v) => {
+  const n = Number(String(v || "").replace(/[^\d.]/g, ""));
+  if (!n) return null;
+  const mm = n <= 20 ? n * 1000 : n;
+  return mm >= 300 && mm <= 15000 ? Math.round(mm) : null;
+};
+
 // Downsize a data URL to a JPEG, for context photos and previous renders sent back to the server.
 const shrink = (src, max, quality) =>
   new Promise((resolve) => {
@@ -47,6 +55,9 @@ export default function Page() {
   const [wallMode, setWallMode] = useState(true); // with 2+ photos: each photo is a different wall
   const [views, setViews] = useState({}); // render per view id: { img, err, loading }
   const [active, setActive] = useState("main");
+  const [widths, setWidths] = useState({}); // wall width per photo (keyed by the photo)
+  const [ceiling, setCeiling] = useState("");
+  const [depth, setDepth] = useState("");
   const [lead, setLead] = useState({ name: "", email: "", phone: "", suburb: "" });
   const fileRef = useRef(null);
 
@@ -95,17 +106,33 @@ export default function Page() {
   const toggleChip = (c) =>
     setPicked((p) => (p.includes(c) ? p.filter((x) => x !== c) : [...p, c]));
 
+  const dims = () => ({
+    widths: photos.map((p) => toMm(widths[p])),
+    ceiling: toMm(ceiling),
+    depth: wallMode && photos.length > 1 ? toMm(depth) : null,
+  });
+
+  const measurements = () => {
+    const d = dims();
+    const walls = wallMode && photos.length > 1
+      ? d.widths.map((w, i) => (w ? `wall ${i + 1} is ${w}mm wide` : null)).filter(Boolean)
+      : d.widths[0] ? [`the wall is ${d.widths[0]}mm wide`] : [];
+    const all = [...walls, d.ceiling && `ceiling height ${d.ceiling}mm`, d.depth && `room depth ${d.depth}mm`].filter(Boolean);
+    return all.length ? `Measurements: ${all.join(", ")}` : "";
+  };
+
   const fullBrief = () => {
     const parts = [];
     if (picked.length) parts.push(picked.join(", "));
     if (brief.trim()) parts.push(brief.trim());
+    if (measurements()) parts.push(measurements());
     return parts.join(". ");
   };
 
   // Walk-in mode: one face-on render per wall photo plus a wide shot of the whole room.
   const walkIn = wallMode && photos.length > 1;
-  const viewIds = walkIn ? ["wide", ...photos.map((_, i) => `w${i}`)] : ["main"];
-  const viewLabel = (id) => (id === "wide" ? "Whole room" : id === "main" ? "Your render" : `Wall ${Number(id.slice(1)) + 1}`);
+  const viewIds = walkIn ? [...photos.map((_, i) => `w${i}`), "wide"] : ["main"];
+  const viewLabel = (id) => (id === "wide" ? "Room view" : id === "main" ? "Your render" : `Wall ${Number(id.slice(1)) + 1}`);
   const rendering = viewIds.some((id) => views[id]?.loading);
 
   const renderView = async (id, body) => {
@@ -121,6 +148,7 @@ export default function Page() {
           mimeType: "image/jpeg",
           brief: fullBrief(),
           messages,
+          dims: dims(),
           baseRender: prev ? await shrink(prev, 1024, 0.8) : undefined,
           ...body,
         }),
@@ -132,6 +160,7 @@ export default function Page() {
       err = "Couldn't reach the render service. Try again.";
     }
     setViews((v) => ({ ...v, [id]: { img: img || v[id]?.img || null, err, loading: false } }));
+    return img;
   };
 
   const runRender = async () => {
@@ -152,12 +181,11 @@ export default function Page() {
       shared = await res.json();
     } catch {}
     const common = { spec: shared.spec, finish: shared.finish, walls: photos.length };
-    await Promise.all(
-      viewIds.map(async (id, k) => {
-        await sleep(k * 400); // stagger starts so the image API isn't hit all at once
-        if (id === "wide") return renderView(id, { ...common, view: "wide", imageBase64: small[0], extraImages: small.slice(1) });
-        const i = Number(id.slice(1));
-        return renderView(id, {
+    // Walls first, then the room view, which fits the finished wall designs into the main photo.
+    const wallImgs = await Promise.all(
+      photos.map(async (_, i) => {
+        await sleep(i * 400); // stagger starts so the image API isn't hit all at once
+        return renderView(`w${i}`, {
           ...common,
           view: "wall",
           wall: i + 1,
@@ -167,6 +195,14 @@ export default function Page() {
         });
       }),
     );
+    const refs = wallImgs.map((img, i) => ({ img: img || views[`w${i}`]?.img, wall: i + 1 })).filter((r) => r.img);
+    await renderView("wide", {
+      ...common,
+      view: "wide",
+      imageBase64: photo,
+      extraImages: await Promise.all(refs.map((r) => shrink(r.img, 768, 0.8))),
+      wallRefs: refs.map((r) => r.wall),
+    });
   };
 
   const askDesigner = async (msgs) => {
@@ -186,7 +222,7 @@ export default function Page() {
   const startDesign = async () => {
     if (!photo || !fullBrief()) return;
     setStage("design");
-    setActive(walkIn ? "wide" : "main");
+    setActive(walkIn ? "w0" : "main");
     setThinking(true);
     runRender(); // fire the images in parallel
     const opener = [{ role: "user", content: `Here is my brief: ${fullBrief()}. ${photos.length > 1 ? `The ${photos.length} attached photos show the actual space this wardrobe will be fitted into; the first is the main view.` : "The attached photo is the actual space this wardrobe will be fitted into."}` }];
@@ -275,8 +311,30 @@ export default function Page() {
               {photos.length > 1 && (
                 <label className="wallmode">
                   <input type="checkbox" checked={wallMode} onChange={(e) => setWallMode(e.target.checked)} />
-                  <span>Each photo is a different wall (e.g. a walk-in). Show me each wall face-on, plus a wide view of the whole room.</span>
+                  <span>Each photo is a different wall (e.g. a walk-in). Show me each wall face-on, plus a view of the whole room fitted out.</span>
                 </label>
+              )}
+              {photos.length > 0 && (
+                <div className="dims">
+                  <p className="lbl">Measurements (mm), so the design fits your real room:</p>
+                  {(walkIn ? photos : [photo]).map((p, i) => (
+                    <label key={i} className="dim">
+                      {walkIn && <img src={p} alt="" />}
+                      <span>{walkIn ? `Wall ${i + 1} width` : "Wall width"}</span>
+                      <input inputMode="decimal" placeholder="e.g. 2400" value={widths[p] || ""} onChange={(e) => setWidths((w) => ({ ...w, [p]: e.target.value }))} />
+                    </label>
+                  ))}
+                  <label className="dim">
+                    <span>Ceiling height</span>
+                    <input inputMode="decimal" placeholder="e.g. 2400" value={ceiling} onChange={(e) => setCeiling(e.target.value)} />
+                  </label>
+                  {walkIn && (
+                    <label className="dim">
+                      <span>Room depth (door to back wall)</span>
+                      <input inputMode="decimal" placeholder="e.g. 1800" value={depth} onChange={(e) => setDepth(e.target.value)} />
+                    </label>
+                  )}
+                </div>
               )}
               <input ref={fileRef} type="file" accept="image/*" multiple onChange={onFile} style={{ display: "none" }} />
             </div>
@@ -289,11 +347,11 @@ export default function Page() {
                   <button key={c} className={"chip" + (picked.includes(c) ? " on" : "")} onClick={() => toggleChip(c)}>{c}</button>
                 ))}
               </div>
-              <p className="lbl" style={{ marginTop: 14 }}>Anything else? Dimensions, style, finish…</p>
+              <p className="lbl" style={{ marginTop: 14 }}>Anything else? Style, finish, what you store…</p>
               <textarea
                 value={brief}
                 onChange={(e) => setBrief(e.target.value)}
-                placeholder="e.g. 2.4m wide wall, floor to 2.7m ceiling. Mostly hanging with 4 drawers and a shoe rack at the base. Finish: warm oak with matte black rails."
+                placeholder="e.g. Mostly hanging with 4 drawers and a shoe rack at the base. Finish: warm oak with matte black rails."
               />
               <button className="cta" disabled={!photo || !fullBrief()} onClick={startDesign}>Generate my design</button>
             </div>
