@@ -110,3 +110,13 @@ input.field { width:100%; border:1px solid var(--line); background:#FBF8F2; bord
 .thumb .x { position:absolute; top:3px; right:3px; width:20px; height:20px; border-radius:50%; border:none; background:rgba(0,0,0,.6); color:#fff; font-size:14px; line-height:20px; padding:0; cursor:pointer; }
 .thumb.add { border:1.5px dashed var(--line); color:var(--muted); font:inherit; font-size:13px; cursor:pointer; }
 .thumb.add:hover { border-color:var(--brass); }
+
+.wallmode { display:flex; gap:8px; align-items:flex-start; margin-top:10px; font-size:13px; color:var(--ink); cursor:pointer; }
+.wallmode input { margin-top:3px; accent-color:var(--brand); }
+.viewtabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+.vtab { border:1px solid var(--line); background:var(--card); color:var(--ink); font:inherit; font-size:13px;
+  padding:6px 12px; border-radius:999px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+.vtab.on { background:var(--brand); border-color:var(--brand); color:var(--card); }
+.vtab .dot { width:7px; height:7px; border-radius:50%; background:var(--brass); animation:pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity:.3; } }
+.render.fit img { object-fit:contain; }

@@ -15,6 +15,13 @@ const START_CUTOFF_MS = 35000; // don't start a new attempt this late; maxDurati
 const BUSY_MESSAGE = "Our image designer is very busy right now. Please try again in a minute.";
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
+const inline = (dataUrl, fallbackMime) => ({
+  inlineData: {
+    mimeType: dataUrl.match(/^data:([^;]+);/)?.[1] || fallbackMime,
+    data: dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl,
+  },
+});
+
 // Image models tend to default to white joinery, so the finish is stated first and
 // spelled out for every part of the wardrobe.
 function finishLine(finish) {
@@ -27,6 +34,7 @@ function finishLine(finish) {
 }
 
 const MAX_EXTRA_PHOTOS = 2; // other views of the room, for context
+const MAX_WALL_PHOTOS = 5; // walk-in mode: every wall photo is sent (downsized by the browser)
 
 // Images 2..n+1: other photos of the same room, to help the model understand it.
 function extraLine(n) {
@@ -74,9 +82,55 @@ function buildRerenderPrompt(spec, finish, extras = 0) {
   );
 }
 
+// Walk-in mode: the customer sent one photo per wall. Each wall gets a face-on render, plus
+// one wide shot of the whole room, all from the same spec so the walls stay consistent.
+function wallPlanLine(plan) {
+  return plan ? `What this wall holds (follow this): ${plan}\n\n` : "";
+}
+
+function buildWallPrompt(spec, finish, wall, walls, others, plan, hasConcept) {
+  const concept = 2 + others;
+  return (
+    "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
+    `joinery studio. The customer photographed each wall of their room. Image 1 is wall ${wall} ` +
+    `of ${walls}. ` +
+    (others ? `Images 2 to ${others + 1} are the other walls, for context only, so the design ` +
+      "matches across walls and the corners line up. " : "") +
+    "Render a FACE-ON view of the wall in image 1 with its custom fitted wardrobe built in: " +
+    "camera centred and square to the wall at standing eye height, vertical lines straight, " +
+    "the whole wall in frame from floor to ceiling. Keep the wall's real width, height, " +
+    "windows, doors, sloped ceiling, skirting, flooring and lighting from image 1. " +
+    (hasConcept ? `Image ${concept} is an earlier face-on concept of this wall: use it ONLY as a ` +
+      "guide to the layout; the materials, colour, doors and lighting MUST follow the " +
+      "specification below — the customer may have changed them. " : "") +
+    "\n\n" +
+    wallPlanLine(plan) +
+    finishLine(finish) +
+    `Wardrobe specification for the whole room: ${spec}\n\n` +
+    "Render as a single photorealistic image."
+  );
+}
+
+function buildWidePrompt(spec, finish, walls, hasConcept) {
+  return (
+    "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
+    `joinery studio. Images 1 to ${walls} are photos of each wall of the customer's room, in ` +
+    "order. Render ONE wide-angle view of the whole room fitted out, as if standing in the " +
+    "doorway looking in, showing as many walls as possible. Keep the room's real shape, " +
+    "size, windows, doors, ceiling and flooring from the photos. Every wall's joinery must " +
+    "match its own face-on design and share one consistent finish. " +
+    (hasConcept ? `Image ${walls + 1} is an earlier wide concept: use it ONLY as a guide to the ` +
+      "layout; the materials, colour, doors and lighting MUST follow the specification below. " : "") +
+    "\n\n" +
+    finishLine(finish) +
+    `Wardrobe specification for the whole room: ${spec}\n\n` +
+    "Render as a single photorealistic image."
+  );
+}
+
 // Merge the original brief and the designer chat into one up-to-date spec, so changes
 // agreed in the chat (e.g. "make it American walnut") actually reach the image model.
-async function consolidateSpec(key, brief, messages) {
+async function consolidateSpec(key, brief, messages, walls = 1, images = []) {
   const transcript = messages
     .map((m) => `${m.role === "user" ? "Customer" : "Designer"}: ${m.content}`)
     .join("\n");
@@ -99,6 +153,13 @@ async function consolidateSpec(key, brief, messages) {
               "exactly two lines and nothing else:\n" +
               "FINISH: <the timber or colour of the whole wardrobe, e.g. 'dark American walnut " +
               "timber veneer', or 'none' if never chosen>\n" +
+              (walls > 1
+                ? `Then exactly ${walls} lines, one per wall photo in order, each 'WALL n: <what the ` +
+                  "wardrobe on this wall holds and where, e.g. long hanging left, drawers and " +
+                  "shelves right; or 'no joinery' with the reason if the wall can't take any>'. " +
+                  "Spread the brief sensibly across the walls, using what the photos show (doors, " +
+                  "windows, wall width). Then:\n"
+                : "") +
               "SPEC: <one plain paragraph: finish and colour, doors and handles, lighting, " +
               "hanging, drawers, shelves, extras and dimensions>\n" +
               "Where the customer changed their mind, use their LATEST choice and drop the old " +
@@ -106,8 +167,14 @@ async function consolidateSpec(key, brief, messages) {
               "Do not mention anything that was replaced.",
           }],
         },
-        contents: [{ role: "user", parts: [{ text: `Original brief: ${brief}\n\nConversation:\n${transcript}` }] }],
-        generationConfig: { maxOutputTokens: 512, temperature: 0.2 },
+        contents: [{
+          role: "user",
+          parts: [
+            ...images.slice(0, MAX_WALL_PHOTOS).map((img) => inline(img, "image/jpeg")),
+            { text: `Original brief: ${brief}\n\nConversation:\n${transcript || "(none yet)"}` },
+          ],
+        }],
+        generationConfig: { maxOutputTokens: 900, temperature: 0.2 },
       }),
     });
     const j = await r.json();
@@ -116,41 +183,50 @@ async function consolidateSpec(key, brief, messages) {
 
     const finish = text.match(/^FINISH:\s*(.+)$/im)?.[1]?.trim();
     const spec = text.match(/^SPEC:\s*([\s\S]+)$/im)?.[1]?.trim() || text;
-    return { finish: finish && !/^none\.?$/i.test(finish) ? finish : null, spec };
+    const wallPlans = Array.from({ length: walls > 1 ? walls : 0 }, (_, i) =>
+      text.match(new RegExp(`^WALL ${i + 1}:\\s*(.+)$`, "im"))?.[1]?.trim() || null);
+    return { finish: finish && !/^none\.?$/i.test(finish) ? finish : null, spec, wallPlans };
   } catch {
     return fallback;
   }
 }
 
-const inline = (dataUrl, fallbackMime) => ({
-  inlineData: {
-    mimeType: dataUrl.match(/^data:([^;]+);/)?.[1] || fallbackMime,
-    data: dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl,
-  },
-});
-
 export async function POST(request) {
   const started = Date.now();
   try {
-    const { imageBase64, extraImages = [], mimeType = "image/jpeg", brief = "", messages = [], baseRender } = await request.json();
-    if (!imageBase64) return Response.json({ error: "Missing image" }, { status: 400 });
+    const {
+      imageBase64, extraImages = [], mimeType = "image/jpeg", brief = "", messages = [], baseRender,
+      // Walk-in mode: "specOnly" returns the shared spec; "wall" and "wide" render one view of it.
+      specOnly = false, view = "match", wall = 1, walls = 1, spec: givenSpec, finish: givenFinish, wallPlan,
+    } = await request.json();
 
     const key = process.env.GEMINI_API_KEY;
     if (!key) return Response.json({ error: "Server not configured (GEMINI_API_KEY)" }, { status: 500 });
 
-    const hasChat = messages.some((m) => m.role === "user");
-    const { finish, spec } = hasChat ? await consolidateSpec(key, brief, messages) : { finish: null, spec: brief };
+    if (specOnly) {
+      const images = [imageBase64, ...extraImages].filter(Boolean);
+      return Response.json(await consolidateSpec(key, brief, messages, walls, images));
+    }
+    if (!imageBase64) return Response.json({ error: "Missing image" }, { status: 400 });
 
-    // Always render from the room photo; a previous render only guides the layout.
-    const extras = extraImages.slice(0, MAX_EXTRA_PHOTOS);
+    const hasChat = messages.some((m) => m.role === "user");
+    const { finish, spec } = givenSpec
+      ? { finish: givenFinish || null, spec: givenSpec }
+      : hasChat ? await consolidateSpec(key, brief, messages) : { finish: null, spec: brief };
+
+    // Always render from the room photos; a previous render only guides the layout.
+    const extras = extraImages.slice(0, view === "match" ? MAX_EXTRA_PHOTOS : MAX_WALL_PHOTOS - 1);
     const parts = [inline(imageBase64, mimeType), ...extras.map((img) => inline(img, mimeType))];
     if (baseRender) parts.push(inline(baseRender, "image/png"));
-    parts.push({
-      text: baseRender ? buildRerenderPrompt(spec, finish, extras.length) : buildPrompt(spec, finish, extras.length),
-    });
+    const prompt =
+      view === "wall" ? buildWallPrompt(spec, finish, wall, walls, extras.length, wallPlan, !!baseRender)
+      : view === "wide" ? buildWidePrompt(spec, finish, 1 + extras.length, !!baseRender)
+      : baseRender ? buildRerenderPrompt(spec, finish, extras.length)
+      : buildPrompt(spec, finish, extras.length);
+    parts.push({ text: prompt });
 
     // Visible in the host's function logs, to check what the image model was asked for.
-    console.log("[render]", JSON.stringify({ rerender: !!baseRender, extraPhotos: extras.length, finish, spec }));
+    console.log("[render]", JSON.stringify({ view, wall, walls, rerender: !!baseRender, extraPhotos: extras.length, finish, wallPlan, spec }));
 
     const attempts = [MODEL, MODEL, ...FALLBACK_MODELS.filter((m) => m !== MODEL)];
     const body = JSON.stringify({ contents: [{ parts }], generationConfig: { responseModalities: ["TEXT", "IMAGE"] } });
