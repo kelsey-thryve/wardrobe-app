@@ -5,6 +5,27 @@ const STUDIO = "Thryve Growth";
 
 const MAX_PHOTOS = 5;
 const RENDER_EXTRA_PHOTOS = 2; // extra views sent with a render; keeps the request under the host's size limit
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Downsize a data URL to a JPEG, for context photos and previous renders sent back to the server.
+const shrink = (src, max, quality) =>
+  new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * s);
+      c.height = Math.round(img.height * s);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      try {
+        resolve(c.toDataURL("image/jpeg", quality));
+      } catch {
+        resolve(src);
+      }
+    };
+    img.onerror = () => resolve(src);
+    img.src = src;
+  });
 const CHIPS = [
   "Full-height hanging rails",
   "Bank of soft-close drawers",
@@ -23,9 +44,9 @@ export default function Page() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
-  const [rendering, setRendering] = useState(false);
-  const [renderImg, setRenderImg] = useState(null);
-  const [renderErr, setRenderErr] = useState(null);
+  const [wallMode, setWallMode] = useState(true); // with 2+ photos: each photo is a different wall
+  const [views, setViews] = useState({}); // render per view id: { img, err, loading }
+  const [active, setActive] = useState("main");
   const [lead, setLead] = useState({ name: "", email: "", phone: "", suburb: "" });
   const fileRef = useRef(null);
 
@@ -81,29 +102,71 @@ export default function Page() {
     return parts.join(". ");
   };
 
-  const runRender = async () => {
-    setRendering(true);
-    setRenderErr(null);
+  // Walk-in mode: one face-on render per wall photo plus a wide shot of the whole room.
+  const walkIn = wallMode && photos.length > 1;
+  const viewIds = walkIn ? ["wide", ...photos.map((_, i) => `w${i}`)] : ["main"];
+  const viewLabel = (id) => (id === "wide" ? "Whole room" : id === "main" ? "Your render" : `Wall ${Number(id.slice(1)) + 1}`);
+  const rendering = viewIds.some((id) => views[id]?.loading);
+
+  const renderView = async (id, body) => {
+    setViews((v) => ({ ...v, [id]: { ...v[id], loading: true, err: null } }));
+    let img = null;
+    let err = null;
     try {
+      const prev = views[id]?.img;
       const res = await fetch("/api/render", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          imageBase64: photo,
-          extraImages: photos.slice(1, 1 + RENDER_EXTRA_PHOTOS),
           mimeType: "image/jpeg",
           brief: fullBrief(),
           messages,
-          baseRender: renderImg,
+          baseRender: prev ? await shrink(prev, 1024, 0.8) : undefined,
+          ...body,
         }),
       });
       const data = await res.json();
-      if (data.imageBase64) setRenderImg(data.imageBase64);
-      else setRenderErr(data.error || "Render failed. Try again.");
+      if (data.imageBase64) img = data.imageBase64;
+      else err = data.error || "Render failed. Try again.";
     } catch {
-      setRenderErr("Couldn't reach the render service. Try again.");
+      err = "Couldn't reach the render service. Try again.";
     }
-    setRendering(false);
+    setViews((v) => ({ ...v, [id]: { img: img || v[id]?.img || null, err, loading: false } }));
+  };
+
+  const runRender = async () => {
+    if (!walkIn) {
+      await renderView("main", { imageBase64: photo, extraImages: photos.slice(1, 1 + RENDER_EXTRA_PHOTOS) });
+      return;
+    }
+    setViews((v) => Object.fromEntries(viewIds.map((id) => [id, { ...v[id], loading: true, err: null }])));
+    const small = await Promise.all(photos.map((p) => shrink(p, 768, 0.75)));
+    // One shared spec (finish, overall design and what each wall holds) keeps the views consistent.
+    let shared = {};
+    try {
+      const res = await fetch("/api/render", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ specOnly: true, imageBase64: small[0], extraImages: small.slice(1), walls: photos.length, brief: fullBrief(), messages }),
+      });
+      shared = await res.json();
+    } catch {}
+    const common = { spec: shared.spec, finish: shared.finish, walls: photos.length };
+    await Promise.all(
+      viewIds.map(async (id, k) => {
+        await sleep(k * 400); // stagger starts so the image API isn't hit all at once
+        if (id === "wide") return renderView(id, { ...common, view: "wide", imageBase64: small[0], extraImages: small.slice(1) });
+        const i = Number(id.slice(1));
+        return renderView(id, {
+          ...common,
+          view: "wall",
+          wall: i + 1,
+          wallPlan: shared.wallPlans?.[i] || undefined,
+          imageBase64: photos[i],
+          extraImages: small.filter((_, j) => j !== i),
+        });
+      }),
+    );
   };
 
   const askDesigner = async (msgs) => {
@@ -123,8 +186,9 @@ export default function Page() {
   const startDesign = async () => {
     if (!photo || !fullBrief()) return;
     setStage("design");
+    setActive(walkIn ? "wide" : "main");
     setThinking(true);
-    runRender(); // fire the image in parallel
+    runRender(); // fire the images in parallel
     const opener = [{ role: "user", content: `Here is my brief: ${fullBrief()}. ${photos.length > 1 ? `The ${photos.length} attached photos show the actual space this wardrobe will be fitted into; the first is the main view.` : "The attached photo is the actual space this wardrobe will be fitted into."}` }];
     const reply = await askDesigner(opener);
     setMessages([{ role: "assistant", content: reply }]);
@@ -208,6 +272,12 @@ export default function Page() {
               <p className="footnote" style={{ textAlign: "left", marginTop: 8 }}>
                 Add up to {MAX_PHOTOS} photos from different angles. The main photo is the view we design on; tap another photo to make it the main one.
               </p>
+              {photos.length > 1 && (
+                <label className="wallmode">
+                  <input type="checkbox" checked={wallMode} onChange={(e) => setWallMode(e.target.checked)} />
+                  <span>Each photo is a different wall (e.g. a walk-in). Show me each wall face-on, plus a wide view of the whole room.</span>
+                </label>
+              )}
               <input ref={fileRef} type="file" accept="image/*" multiple onChange={onFile} style={{ display: "none" }} />
             </div>
             <div className="col">
@@ -235,15 +305,37 @@ export default function Page() {
             <div className="panel grid">
               <div className="col">
                 <div className="stepnum">Your space, reimagined</div>
-                <div className="steph">Your render</div>
-                <div className="render">
-                  {rendering && <div className="loading">Rendering your wardrobe into the room…<br />(10–30 seconds)</div>}
-                  {!rendering && renderImg && <img src={renderImg} alt="Your wardrobe render" />}
-                  {!rendering && renderErr && <div className="err">{renderErr}</div>}
-                  {!rendering && renderImg && <div className="rlabel">Indicative render</div>}
-                </div>
+                <div className="steph">{walkIn ? "Your renders" : "Your render"}</div>
+                {walkIn && (
+                  <div className="viewtabs">
+                    {viewIds.map((id) => (
+                      <button key={id} className={"vtab" + (active === id ? " on" : "")} onClick={() => setActive(id)}>
+                        {viewLabel(id)}
+                        {views[id]?.loading && <span className="dot" aria-label="rendering" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {(() => {
+                  const v = views[active] || {};
+                  return (
+                    <div className={"render" + (walkIn ? " fit" : "")}>
+                      {v.loading && (
+                        <div className="loading">
+                          {walkIn ? `Rendering ${viewLabel(active).toLowerCase()}…` : "Rendering your wardrobe into the room…"}
+                          <br />(10–30 seconds)
+                        </div>
+                      )}
+                      {!v.loading && v.img && <img src={v.img} alt={`${viewLabel(active)} render`} />}
+                      {!v.loading && v.err && <div className="err">{v.err}</div>}
+                      {!v.loading && v.img && <div className="rlabel">{walkIn ? `${viewLabel(active)} · indicative render` : "Indicative render"}</div>}
+                    </div>
+                  );
+                })()}
                 {!rendering && (
-                  <button className="rerender" onClick={runRender}>↻ Re-render with the latest changes</button>
+                  <button className="rerender" onClick={runRender}>
+                    ↻ Re-render {walkIn ? "all views" : ""} with the latest changes
+                  </button>
                 )}
               </div>
 

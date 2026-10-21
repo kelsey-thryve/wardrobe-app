@@ -43,6 +43,15 @@ allows function timeouts of 60s — Vercel Hobby caps some functions lower; Pro 
 
 Switch via `GEMINI_IMAGE_MODEL`. Chat text (`gemini-3.6-flash`) is a fraction of a cent.
 
+## Walk-in mode (one photo per wall)
+
+When a customer uploads 2 to 5 photos and leaves "Each photo is a different wall" ticked, the app
+renders a face-on view of each wall plus one wide shot of the whole room. A first call to
+`/api/render` with `specOnly` turns the brief, chat and photos into one shared spec (finish,
+overall design, and what each wall holds), and every view is rendered from it so the walls
+stay consistent. That is one render per wall plus one, so a 4-wall walk-in costs 5 renders
+each time it is rendered or re-rendered. Untick the box to get the single render instead.
+
 ## Money-saving guardrails (important for paid traffic)
 
 Every render costs you, and cold clicks are low-intent. Before scaling ad spend:
