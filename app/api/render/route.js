@@ -26,32 +26,48 @@ function finishLine(finish) {
   );
 }
 
-function buildPrompt(spec, finish) {
+const MAX_EXTRA_PHOTOS = 2; // other views of the room, for context
+
+// Images 2..n+1: other photos of the same room, to help the model understand it.
+function extraLine(n) {
+  if (!n) return "";
+  const which = n === 1 ? "Image 2 is another photo" : `Images 2 to ${n + 1} are other photos`;
+  return (
+    `${which} of the same room from a different angle. Use ${n === 1 ? "it" : "them"} ONLY to ` +
+    "understand the space (its depth, wall lengths, ceiling, and what is out of frame in " +
+    "image 1). Do not render from their viewpoints.\n\n"
+  );
+}
+
+function buildPrompt(spec, finish, extras = 0) {
   return (
     "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
-    "joinery studio. Using the supplied photograph of the customer's actual room as the " +
+    "joinery studio. Using image 1, the photograph of the customer's actual room, as the " +
     "exact base, design and render a custom fitted wardrobe built into the same wall/alcove. " +
     "CRITICAL: preserve the room's real geometry, perspective, wall positions, window and " +
     "door placement, flooring and natural lighting exactly as photographed — do not restyle " +
     "the room or move anything. Only add the wardrobe joinery, seamlessly integrated and " +
     "correctly scaled to the space, with realistic shadows and materials.\n\n" +
+    extraLine(extras) +
     finishLine(finish) +
     `Wardrobe specification from the customer: ${spec}\n\n` +
-    "Render as a single photorealistic image, same camera angle as the input photo."
+    "Render as a single photorealistic image, same camera angle as image 1."
   );
 }
 
 // Re-render: start again from the room photo, using the previous render only as a layout
 // guide. Asking the model to edit the previous render tends to return it unchanged.
-function buildRerenderPrompt(spec, finish) {
+function buildRerenderPrompt(spec, finish, extras = 0) {
+  const concept = 2 + extras;
   return (
     "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
-    "joinery studio. Image 1 is a photograph of the customer's actual room. Image 2 is an " +
+    `joinery studio. Image 1 is a photograph of the customer's actual room. Image ${concept} is an ` +
     "earlier concept of their wardrobe. Render the wardrobe into the room in image 1, " +
     "keeping the room's geometry, perspective, flooring and natural light exactly as " +
-    "photographed. Use image 2 ONLY as a guide to the layout (where the hanging, shelves, " +
+    `photographed. Use image ${concept} ONLY as a guide to the layout (where the hanging, shelves, ` +
     "cubes, drawers and shoe racks sit). The materials, colour, doors and lighting MUST " +
-    "follow the specification below, NOT image 2 — the customer has changed them.\n\n" +
+    `follow the specification below, NOT image ${concept} — the customer has changed them.\n\n` +
+    extraLine(extras) +
     finishLine(finish) +
     `Final wardrobe specification: ${spec}\n\n` +
     "Render as a single photorealistic image, same camera angle as image 1."
@@ -116,7 +132,7 @@ const inline = (dataUrl, fallbackMime) => ({
 export async function POST(request) {
   const started = Date.now();
   try {
-    const { imageBase64, mimeType = "image/jpeg", brief = "", messages = [], baseRender } = await request.json();
+    const { imageBase64, extraImages = [], mimeType = "image/jpeg", brief = "", messages = [], baseRender } = await request.json();
     if (!imageBase64) return Response.json({ error: "Missing image" }, { status: 400 });
 
     const key = process.env.GEMINI_API_KEY;
@@ -126,12 +142,15 @@ export async function POST(request) {
     const { finish, spec } = hasChat ? await consolidateSpec(key, brief, messages) : { finish: null, spec: brief };
 
     // Always render from the room photo; a previous render only guides the layout.
-    const parts = [inline(imageBase64, mimeType)];
+    const extras = extraImages.slice(0, MAX_EXTRA_PHOTOS);
+    const parts = [inline(imageBase64, mimeType), ...extras.map((img) => inline(img, mimeType))];
     if (baseRender) parts.push(inline(baseRender, "image/png"));
-    parts.push({ text: baseRender ? buildRerenderPrompt(spec, finish) : buildPrompt(spec, finish) });
+    parts.push({
+      text: baseRender ? buildRerenderPrompt(spec, finish, extras.length) : buildPrompt(spec, finish, extras.length),
+    });
 
     // Visible in the host's function logs, to check what the image model was asked for.
-    console.log("[render]", JSON.stringify({ rerender: !!baseRender, finish, spec }));
+    console.log("[render]", JSON.stringify({ rerender: !!baseRender, extraPhotos: extras.length, finish, spec }));
 
     const attempts = [MODEL, MODEL, ...FALLBACK_MODELS.filter((m) => m !== MODEL)];
     const body = JSON.stringify({ contents: [{ parts }], generationConfig: { responseModalities: ["TEXT", "IMAGE"] } });
