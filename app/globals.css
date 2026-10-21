@@ -120,3 +120,10 @@ input.field { width:100%; border:1px solid var(--line); background:#FBF8F2; bord
 .vtab .dot { width:7px; height:7px; border-radius:50%; background:var(--brass); animation:pulse 1s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity:.3; } }
 .render.fit img { object-fit:contain; }
+.dims { margin-top:14px; display:flex; flex-direction:column; gap:8px; }
+.dims .lbl { margin:0 0 2px; }
+.dim { display:flex; align-items:center; gap:10px; font-size:13px; }
+.dim img { width:34px; height:34px; object-fit:cover; border-radius:3px; border:1px solid var(--line); }
+.dim span { flex:1; color:var(--ink); }
+.dim input { width:110px; border:1px solid var(--line); background:#FBF8F2; border-radius:3px; padding:7px 9px; font:inherit; color:var(--ink); }
+.dim input:focus { outline:none; border-color:var(--brass); }
