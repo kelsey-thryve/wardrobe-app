@@ -44,7 +44,8 @@ const validMm = (n) => (Number.isFinite(n) && n >= 300 && n <= 15000 ? n : null)
 const SCALE_RULE =
   "SCALE: keep the room exactly the size it is in the photos. Do not lengthen walls, raise " +
   "the ceiling, widen or deepen the room, or add floor space, and do not add wardrobe " +
-  "sections that would not fit.\n\n";
+  "sections that would not fit. Never mirror or flip a photo: windows, doors and corners " +
+  "stay on the same side as in the photo.\n\n";
 
 function sizeLine(width, ceiling, depth) {
   const w = validMm(width), h = validMm(ceiling), d = validMm(depth);
@@ -117,62 +118,59 @@ function buildRerenderPrompt(spec, finish, extras = 0, size = SCALE_RULE) {
   );
 }
 
-// Walk-in mode: the customer sent one photo per wall. Each wall gets a face-on render, plus
-// one wide shot of the whole room, all from the same spec so the walls stay consistent.
+// Walk-in mode: the customer sent one photo per wall. The room view is designed first, on the
+// main photo with the other walls as context; each wall is then drawn from that room view, so
+// every wall matches it.
 function wallPlanLine(plan) {
   return plan ? `What this wall holds (follow this): ${plan}\n\n` : "";
 }
 
-function buildWallPrompt(spec, finish, wall, walls, others, plan, hasConcept, size = SCALE_RULE) {
+function buildWidePrompt(spec, finish, others, hasConcept, size = SCALE_RULE) {
   const concept = 2 + others;
   return (
     "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
-    `joinery studio. The customer photographed each wall of their room. Image 1 is wall ${wall} ` +
-    `of ${walls}. ` +
-    (others ? `Images 2 to ${others + 1} are the other walls, for context only, so the design ` +
-      "matches across walls and the corners line up. " : "") +
-    "Render a FACE-ON view of the wall in image 1 with its custom fitted wardrobe built in: " +
-    "camera centred and square to the wall at standing eye height, vertical lines straight, " +
-    "the whole wall in frame from floor to ceiling. Show exactly the same stretch of wall as " +
-    "image 1, squared up, and nothing beyond its corners. Keep the wall's real width, height, " +
-    "windows, doors, sloped ceiling, skirting, flooring and lighting from image 1. " +
-    (hasConcept ? `Image ${concept} is an earlier face-on concept of this wall: use it ONLY as a ` +
-      "guide to the layout; the materials, colour, doors and lighting MUST follow the " +
-      "specification below — the customer may have changed them. " : "") +
-    "\n\n" +
-    wallPlanLine(plan) +
-    size +
-    finishLine(finish) +
-    `Wardrobe specification for the whole room: ${spec}\n\n` +
-    "Render as a single photorealistic image."
-  );
-}
-
-// Room view: the main photo's camera angle with every visible wall fitted out. The finished
-// face-on wall renders are the references, so the view matches them and can't come back empty.
-function buildWidePrompt(spec, finish, wallRefs, hasConcept, size = SCALE_RULE) {
-  const refs = wallRefs.length
-    ? wallRefs.map((w, i) => `Image ${i + 2} is the approved face-on design for wall ${w}.`).join(" ") + " "
-    : "";
-  const concept = 2 + wallRefs.length;
-  return (
-    "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
-    "joinery studio. Image 1 is a photograph of the customer's actual room. " + refs +
-    "Render the room in image 1 from exactly the same camera angle, with the custom fitted " +
-    "wardrobe joinery built onto every wall that can be seen in it" +
-    (wallRefs.length ? ", matching the approved wall designs (layout, finish, doors, handles and " +
-      "lighting). " : ", following the specification below. ") +
+    "joinery studio. Image 1 is a photograph of the customer's actual room. " +
+    (others ? `${others === 1 ? "Image 2 is a photo" : `Images 2 to ${others + 1} are photos`} of ` +
+      "the room's other walls, so you know the whole room (its shape, what is out of frame, and " +
+      "where the windows and doors are); do not render from their viewpoints. " : "") +
+    "Design the complete fitted wardrobe for the whole room and render it in image 1 from " +
+    "exactly the same camera angle, with the joinery built onto every wall that can be seen. " +
     "The result MUST clearly show the new fitted wardrobes: returning image 1 unchanged, or " +
     "with only small changes, is wrong. Keep the room's real geometry, perspective, windows, " +
     "doors, ceiling, flooring and natural light exactly as photographed. " +
     (hasConcept ? `Image ${concept} is an earlier concept of this view: use it ONLY as a guide to ` +
-      "the layout; the materials, colour, doors and lighting MUST follow the designs and " +
-      "specification. " : "") +
+      "the layout; the materials, colour, doors and lighting MUST follow the specification " +
+      "below — the customer may have changed them. " : "") +
     "\n\n" +
     size +
     finishLine(finish) +
     `Wardrobe specification for the whole room: ${spec}\n\n` +
     "Render as a single photorealistic image, same camera angle as image 1."
+  );
+}
+
+function buildWallPrompt(spec, finish, wall, walls, hasMaster, others, plan, size = SCALE_RULE) {
+  const ctx = hasMaster ? 0 : others; // without a room view, fall back to the other wall photos
+  return (
+    "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
+    `joinery studio. Image 1 is a photo of wall ${wall} of ${walls} of the customer's room. ` +
+    (hasMaster
+      ? "Image 2 is the APPROVED design of the whole room. Render wall " + wall + " with exactly " +
+        "the fitted wardrobe that image 2 shows on this wall: the same sections, hanging, " +
+        "shelves, drawers, doors, handles, finish, colour and lighting. It must look like the " +
+        "same room and the same joinery as image 2, seen from in front of this wall. If this " +
+        "wall is not visible in image 2, continue image 2's design exactly (same finish, " +
+        "proportions and details). "
+      : (ctx ? `Images 2 to ${ctx + 1} are the other walls, for context only. ` : "")) +
+    "Camera: face-on, centred and square to the wall at standing eye height, vertical lines " +
+    "straight, the whole wall from floor to ceiling. Show exactly the same stretch of wall as " +
+    "image 1, squared up, and nothing beyond its corners. Keep every window, door, light " +
+    "switch, ceiling slope and skirting exactly where it is in image 1, on the same side.\n\n" +
+    (hasMaster ? "" : wallPlanLine(plan)) +
+    size +
+    finishLine(finish) +
+    `Wardrobe specification for the whole room: ${spec}\n\n` +
+    "Render as a single photorealistic image."
   );
 }
 
@@ -246,7 +244,7 @@ export async function POST(request) {
       imageBase64, extraImages = [], mimeType = "image/jpeg", brief = "", messages = [], baseRender,
       // Walk-in mode: "specOnly" returns the shared spec; "wall" and "wide" render one view of it.
       specOnly = false, view = "match", wall = 1, walls = 1, spec: givenSpec, finish: givenFinish, wallPlan,
-      dims = {}, wallRefs = [],
+      dims = {}, master,
     } = await request.json();
 
     const key = process.env.GEMINI_API_KEY;
@@ -265,8 +263,11 @@ export async function POST(request) {
 
     // Always render from the room photos; a previous render only guides the layout.
     const extras = extraImages.slice(0, view === "match" ? MAX_EXTRA_PHOTOS : MAX_WALL_PHOTOS - 1);
-    const parts = [inline(imageBase64, mimeType), ...extras.map((img) => inline(img, mimeType))];
-    if (baseRender) parts.push(inline(baseRender, "image/png"));
+    const useMaster = view === "wall" && !!master;
+    const parts = [inline(imageBase64, mimeType)];
+    if (useMaster) parts.push(inline(master, "image/jpeg"));
+    else parts.push(...extras.map((img) => inline(img, mimeType)));
+    if (baseRender && !useMaster) parts.push(inline(baseRender, "image/png"));
     const widths = Array.isArray(dims.widths) ? dims.widths.map(Number) : [];
     const ceiling = Number(dims.ceiling), depth = Number(dims.depth);
     const wallSizes = widths.map((w, i) => (validMm(w) ? `wall ${i + 1} is ${mm(w)} wide` : null)).filter(Boolean);
@@ -274,14 +275,14 @@ export async function POST(request) {
       ? (wallSizes.length ? `WALL WIDTHS (exact): ${wallSizes.join(", ")}.\n` : "") + sizeLine(undefined, ceiling, depth)
       : sizeLine(widths[view === "wall" ? wall - 1 : 0], ceiling, depth);
     const prompt =
-      view === "wall" ? buildWallPrompt(spec, finish, wall, walls, extras.length, wallPlan, !!baseRender, size)
-      : view === "wide" ? buildWidePrompt(spec, finish, wallRefs.slice(0, extras.length), !!baseRender, size)
+      view === "wall" ? buildWallPrompt(spec, finish, wall, walls, useMaster, extras.length, wallPlan, size)
+      : view === "wide" ? buildWidePrompt(spec, finish, extras.length, !!baseRender, size)
       : baseRender ? buildRerenderPrompt(spec, finish, extras.length, size)
       : buildPrompt(spec, finish, extras.length, size);
     parts.push({ text: prompt });
 
     // Visible in the host's function logs, to check what the image model was asked for.
-    console.log("[render]", JSON.stringify({ view, wall, walls, dims, wallRefs, rerender: !!baseRender, extraPhotos: extras.length, finish, wallPlan, spec }));
+    console.log("[render]", JSON.stringify({ view, wall, walls, dims, master: useMaster, rerender: !!baseRender && !useMaster, extraPhotos: extras.length, finish, wallPlan, spec }));
 
     const attempts = [MODEL, MODEL, ...FALLBACK_MODELS.filter((m) => m !== MODEL)];
     const body = JSON.stringify({ contents: [{ parts }], generationConfig: { responseModalities: ["TEXT", "IMAGE"] } });
