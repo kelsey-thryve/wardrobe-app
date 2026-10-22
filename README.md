@@ -46,11 +46,18 @@ Switch via `GEMINI_IMAGE_MODEL`. Chat text (`gemini-3.6-flash`) is a fraction of
 ## Walk-in mode (one photo per wall)
 
 When a customer uploads 2 to 5 photos and leaves "Each photo is a different wall" ticked, the app
-renders a face-on view of each wall plus one wide shot of the whole room. A first call to
-`/api/render` with `specOnly` turns the brief, chat and photos into one shared spec (finish,
-overall design, and what each wall holds), and every view is rendered from it so the walls
-stay consistent. That is one render per wall plus one, so a 4-wall walk-in costs 5 renders
-each time it is rendered or re-rendered. Untick the box to get the single render instead.
+designs the whole room first and then draws each wall from it:
+
+1. `/api/render` with `specOnly` turns the brief, chat, photos and measurements into one shared
+   spec (finish and overall design).
+2. The **room view** renders the main photo from the same camera angle with the closet fitted,
+   using the other wall photos as context.
+3. Each **wall** is then rendered face-on from its own photo, with the room view as the approved
+   design, so every wall matches it.
+
+Customers can enter each wall's width, the ceiling height and the room depth; these go into every
+prompt as exact sizes. A 4-wall walk-in costs 5 renders each time it is rendered or re-rendered.
+Untick the box to get the single render instead.
 
 ## Money-saving guardrails (important for paid traffic)
 

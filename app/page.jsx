@@ -131,7 +131,7 @@ export default function Page() {
 
   // Walk-in mode: one face-on render per wall photo plus a wide shot of the whole room.
   const walkIn = wallMode && photos.length > 1;
-  const viewIds = walkIn ? [...photos.map((_, i) => `w${i}`), "wide"] : ["main"];
+  const viewIds = walkIn ? ["wide", ...photos.map((_, i) => `w${i}`)] : ["main"];
   const viewLabel = (id) => (id === "wide" ? "Room view" : id === "main" ? "Your render" : `Wall ${Number(id.slice(1)) + 1}`);
   const rendering = viewIds.some((id) => views[id]?.loading);
 
@@ -181,8 +181,12 @@ export default function Page() {
       shared = await res.json();
     } catch {}
     const common = { spec: shared.spec, finish: shared.finish, walls: photos.length };
-    // Walls first, then the room view, which fits the finished wall designs into the main photo.
-    const wallImgs = await Promise.all(
+    // The room view comes first: the whole closet designed on the main photo, with the other
+    // walls as context. Each wall is then drawn from that room view, so they all match it.
+    const room = await renderView("wide", { ...common, view: "wide", imageBase64: photo, extraImages: small.slice(1) });
+    const master = room || views.wide?.img;
+    const masterSmall = master ? await shrink(master, 1024, 0.85) : undefined;
+    await Promise.all(
       photos.map(async (_, i) => {
         await sleep(i * 400); // stagger starts so the image API isn't hit all at once
         return renderView(`w${i}`, {
@@ -191,18 +195,12 @@ export default function Page() {
           wall: i + 1,
           wallPlan: shared.wallPlans?.[i] || undefined,
           imageBase64: photos[i],
-          extraImages: small.filter((_, j) => j !== i),
+          master: masterSmall,
+          extraImages: masterSmall ? [] : small.filter((_, j) => j !== i),
+          baseRender: undefined, // the room view is the guide, not the wall's previous render
         });
       }),
     );
-    const refs = wallImgs.map((img, i) => ({ img: img || views[`w${i}`]?.img, wall: i + 1 })).filter((r) => r.img);
-    await renderView("wide", {
-      ...common,
-      view: "wide",
-      imageBase64: photo,
-      extraImages: await Promise.all(refs.map((r) => shrink(r.img, 768, 0.8))),
-      wallRefs: refs.map((r) => r.wall),
-    });
   };
 
   const askDesigner = async (msgs) => {
@@ -222,7 +220,7 @@ export default function Page() {
   const startDesign = async () => {
     if (!photo || !fullBrief()) return;
     setStage("design");
-    setActive(walkIn ? "w0" : "main");
+    setActive(walkIn ? "wide" : "main");
     setThinking(true);
     runRender(); // fire the images in parallel
     const opener = [{ role: "user", content: `Here is my brief: ${fullBrief()}. ${photos.length > 1 ? `The ${photos.length} attached photos show the actual space this wardrobe will be fitted into; the first is the main view.` : "The attached photo is the actual space this wardrobe will be fitted into."}` }];
