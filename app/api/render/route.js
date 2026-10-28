@@ -152,7 +152,8 @@ function planLines(plan) {
   return plan ? `LAYOUT (follow exactly, walls as seen from the doorway):\n${plan.walls.map((w) => `- ${planWallText(w)}`).join("\n")}\n\n` : "";
 }
 
-function buildRoomPrompt(spec, finish, plan, closeups, hasConcept, size = SCALE_RULE) {
+function buildRoomPrompt(spec, finish, plan, closeups, hasConcept, size = SCALE_RULE, hasGuide = false) {
+  if (hasGuide) return buildGuidedRoomPrompt(spec, finish, plan, hasConcept, size);
   const concept = 2 + closeups;
   return (
     "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
@@ -166,6 +167,31 @@ function buildRoomPrompt(spec, finish, plan, closeups, hasConcept, size = SCALE_
     "as photographed. " +
     (hasConcept ? `Image ${concept} is an earlier concept of this view: use it ONLY as a guide; ` +
       "the layout below and the specification win. " : "") +
+    "\n\n" +
+    planLines(plan) +
+    size +
+    finishLine(finish) +
+    `Wardrobe specification: ${spec}\n\n` +
+    "Render as a single photorealistic image, same camera angle as image 1."
+  );
+}
+
+// With a layout guide (image 2: the photo with each wall's plan drawing warped onto it), the
+// room view has to follow the same plan the wall views are drawn from.
+function buildGuidedRoomPrompt(spec, finish, plan, hasConcept, size) {
+  return (
+    "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
+    "joinery studio. Image 1 is the customer's room photographed from the doorway. Image 2 is " +
+    "the APPROVED layout: the same photo with the planned fitted wardrobe drawn flat onto each " +
+    "wall. Render image 1 from exactly the same camera angle as a real photograph with that " +
+    "wardrobe built in: on every wall, the same sections in the same places, at the same widths " +
+    "and heights, with the shelves, hanging rails, drawers, windows and doors exactly where " +
+    "image 2 shows them. Do not add, remove or rearrange sections. Image 2 is only a diagram: " +
+    "use real materials, depth, shadows and lighting, not its flat drawing style. Replace any " +
+    "existing shelving with this design. Keep the room's real geometry, perspective, windows, " +
+    "doors, ceiling, flooring and light exactly as photographed. " +
+    (hasConcept ? "Image 3 is an earlier render of this view: use it only for the look; image 2 " +
+      "wins on layout. " : "") +
     "\n\n" +
     planLines(plan) +
     size +
@@ -308,14 +334,20 @@ async function planLayout(key, brief, messages, images, dims) {
             '{"finish": "<timber or colour, e.g. light oak timber veneer>", "colour": "<hex of ' +
             'that finish>", "spec": "<one plain paragraph describing the finished design>", ' +
             '"walls": [{"name": "Left wall", "width": <mm>, "sections": [{"type": "<type>", ' +
-            '"width": <mm>}]}]}\n' +
+            '"width": <mm>}], "outline": [[x, y], [x, y], [x, y], [x, y]]}]}\n' +
             "Walls are as seen from the doorway in image 1, in order: Left wall, Back wall, " +
             "Right wall (skip any that isn't visible). Sections run left to right as you face " +
             `that wall, their widths add up to the wall width. Section types: ${SECTION_LIST}. ` +
             "Mark real windows and doors with the window and door types at their true positions. " +
             "Use the customer's measurements exactly where given; otherwise estimate from the " +
             "photos. Typical widths: hanging 600-1000mm, drawers 450-900mm, shelves 300-900mm. " +
-            "Follow the brief and the customer's latest choices in the conversation.",
+            "Follow the brief and the customer's latest choices in the conversation. " +
+            "outline is where that whole wall appears in image 1, as fractions of image 1's width " +
+            "and height (0 to 1, origin top left), in this order: the wall's top-left corner (where " +
+            "it meets the ceiling), top-right corner, bottom-right corner (where it meets the " +
+            "floor), bottom-left corner. Left and right are as seen in image 1. A corner hidden " +
+            "out of frame may lie a little outside 0 to 1. Be precise: the layout is drawn onto " +
+            "the photo at these corners.",
         }],
       },
       contents: [{
@@ -343,7 +375,7 @@ export async function POST(request) {
       imageBase64, extraImages = [], mimeType = "image/jpeg", brief = "", messages = [], baseRender,
       // Walk-in mode: "planOnly" returns the shared plan; "wide", "wall" and "sheet" render from it.
       planOnly = false, view = "match", wallIndex = 0, spec: givenSpec, finish: givenFinish, plan: givenPlan,
-      dims = {}, roomImage,
+      dims = {}, roomImage, layoutGuide,
     } = await request.json();
 
     const key = process.env.GEMINI_API_KEY;
@@ -364,10 +396,12 @@ export async function POST(request) {
     const walkIn = view === "wide" || view === "wall" || view === "sheet";
     const plan = walkIn ? normalisePlan(givenPlan, { widths: dims.widths, ceiling: dims.ceiling }) : null;
     if (view === "wall" && !plan?.walls[wallIndex]) return Response.json({ error: "Missing layout plan" }, { status: 400 });
-    const extras = view === "wall" ? [] : extraImages.slice(0, view === "match" ? MAX_EXTRA_PHOTOS : MAX_WALL_PHOTOS - 1);
+    const guided = view === "wide" && !!layoutGuide;
+    const extras = view === "wall" || guided ? [] : extraImages.slice(0, view === "match" ? MAX_EXTRA_PHOTOS : MAX_WALL_PHOTOS - 1);
     const concept = baseRender && (view === "match" || view === "wide");
     const parts = [inline(imageBase64, mimeType), ...extras.map((img) => inline(img, mimeType))];
     if (view === "wall" && roomImage) parts.push(inline(roomImage, "image/jpeg"));
+    if (guided) parts.push(inline(layoutGuide, "image/jpeg"));
     if (concept) parts.push(inline(baseRender, "image/png"));
     const widths = Array.isArray(dims.widths) ? dims.widths.map(Number) : [];
     const ceiling = Number(dims.ceiling) || plan?.ceiling, depth = Number(dims.depth);
@@ -376,14 +410,14 @@ export async function POST(request) {
       : sizeLine(undefined, ceiling, depth);
     const prompt =
       view === "wall" ? buildWallPrompt(spec, finish, plan, wallIndex, !!roomImage, sizeLine(plan.walls[wallIndex].width, ceiling, depth))
-      : view === "wide" ? buildRoomPrompt(spec, finish, plan, extras.length, concept, roomSize)
+      : view === "wide" ? buildRoomPrompt(spec, finish, plan, extras.length, concept, roomSize, guided)
       : view === "sheet" ? buildSheetPrompt(spec, finish, plan || { walls: [] }, extras.length, roomSize)
       : baseRender ? buildRerenderPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth))
       : buildPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth));
     parts.push({ text: prompt });
 
     // Visible in the host's function logs, to check what the image model was asked for.
-    console.log("[render]", JSON.stringify({ view, wallIndex, dims, roomImage: !!roomImage, rerender: !!concept, extraPhotos: extras.length, finish, plan: plan && plan.walls.map(planWallText), spec }));
+    console.log("[render]", JSON.stringify({ view, wallIndex, dims, roomImage: !!roomImage, guided, rerender: !!concept, extraPhotos: extras.length, finish, plan: plan && plan.walls.map(planWallText), spec }));
 
     const attempts = [MODEL, MODEL, ...FALLBACK_MODELS.filter((m) => m !== MODEL)];
     // Wall renders take the wall's own shape (width to ceiling height).
