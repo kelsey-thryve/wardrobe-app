@@ -175,23 +175,44 @@ function buildRoomPrompt(spec, finish, plan, closeups, hasConcept, size = SCALE_
   );
 }
 
-function buildWallPrompt(spec, finish, plan, wallIndex, size = SCALE_RULE) {
+// Each wall is drawn from its own to-scale plan drawing (image 1) for layout and proportions,
+// and the approved room view (image 2) for materials and lighting, so it matches both.
+function buildWallPrompt(spec, finish, plan, wallIndex, hasRoom, size = SCALE_RULE) {
   const wall = plan.walls[wallIndex];
   return (
     "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
-    "joinery studio. Image 1 is the APPROVED render of the customer's room, seen from the " +
-    `doorway. Show the ${wall.name.toLowerCase()} of that same room face-on: camera centred and ` +
-    "square to that wall at standing eye height, vertical lines straight, the whole wall from " +
-    "floor to ceiling and corner to corner. This is the same room and the same joinery as " +
-    "image 1, only viewed straight on: copy exactly the sections, hanging rails, shelves, " +
-    "drawers, handles, finish, colour, lighting, flooring and walls that image 1 shows on this " +
-    "wall. Do not redesign anything, and do not add or remove sections.\n\n" +
+    `joinery studio. Image 1 is the APPROVED to-scale layout drawing of the ${wall.name.toLowerCase()}: ` +
+    `it shows the whole wall edge to edge and floor to ceiling (${mm(wall.width)} wide, ` +
+    `${mm(plan.ceiling)} high), with every section, shelf, hanging rail, drawer, window and door ` +
+    "at its exact position and size. " +
+    (hasRoom ? "Image 2 is the approved render of the same room: it shows the materials, finish, " +
+      "handles, lighting, flooring and wall colour. " : "") +
+    "Render a photorealistic, face-on photo of this wall that matches image 1 EXACTLY in layout " +
+    "and proportions: the same framing (the left and right edges of the photo are the wall's " +
+    "corners, the floor is at the bottom and the ceiling at the top), the same number and widths " +
+    "of sections, shelves and drawers at the same heights, and windows and doors exactly where " +
+    "they are drawn. " +
+    (hasRoom ? "Match image 2 for materials, colours, finish, handles and lighting. " : "") +
+    "Do not add, remove, widen or move anything, and show no labels or dimension lines. The " +
+    "garment shapes in the drawing only mark hanging space; show the rails with a few clothes or " +
+    "empty.\n\n" +
     `This wall: ${planWallText(wall)}.\n` +
     size +
     finishLine(finish) +
     `Wardrobe specification: ${spec}\n\n` +
     "Render as a single photorealistic image."
   );
+}
+
+// Closest aspect ratio the image model supports, so a wall render has the wall's own shape.
+const RATIOS = ["21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16"];
+function closestRatio(w, h) {
+  const target = Math.log(w / h);
+  return RATIOS.reduce((best, r) => {
+    const [a, b] = r.split(":").map(Number);
+    const [c, d] = best.split(":").map(Number);
+    return Math.abs(Math.log(a / b) - target) < Math.abs(Math.log(c / d) - target) ? r : best;
+  });
 }
 
 // One image holding every view, so they come from a single generation and match. The browser
@@ -322,7 +343,7 @@ export async function POST(request) {
       imageBase64, extraImages = [], mimeType = "image/jpeg", brief = "", messages = [], baseRender,
       // Walk-in mode: "planOnly" returns the shared plan; "wide", "wall" and "sheet" render from it.
       planOnly = false, view = "match", wallIndex = 0, spec: givenSpec, finish: givenFinish, plan: givenPlan,
-      dims = {},
+      dims = {}, roomImage,
     } = await request.json();
 
     const key = process.env.GEMINI_API_KEY;
@@ -346,6 +367,7 @@ export async function POST(request) {
     const extras = view === "wall" ? [] : extraImages.slice(0, view === "match" ? MAX_EXTRA_PHOTOS : MAX_WALL_PHOTOS - 1);
     const concept = baseRender && (view === "match" || view === "wide");
     const parts = [inline(imageBase64, mimeType), ...extras.map((img) => inline(img, mimeType))];
+    if (view === "wall" && roomImage) parts.push(inline(roomImage, "image/jpeg"));
     if (concept) parts.push(inline(baseRender, "image/png"));
     const widths = Array.isArray(dims.widths) ? dims.widths.map(Number) : [];
     const ceiling = Number(dims.ceiling) || plan?.ceiling, depth = Number(dims.depth);
@@ -353,7 +375,7 @@ export async function POST(request) {
       ? `WALL WIDTHS (exact): ${plan.walls.map((w) => `${w.name.toLowerCase()} ${mm(w.width)}`).join(", ")}.\n` + sizeLine(undefined, ceiling, depth)
       : sizeLine(undefined, ceiling, depth);
     const prompt =
-      view === "wall" ? buildWallPrompt(spec, finish, plan, wallIndex, sizeLine(plan.walls[wallIndex].width, ceiling, depth))
+      view === "wall" ? buildWallPrompt(spec, finish, plan, wallIndex, !!roomImage, sizeLine(plan.walls[wallIndex].width, ceiling, depth))
       : view === "wide" ? buildRoomPrompt(spec, finish, plan, extras.length, concept, roomSize)
       : view === "sheet" ? buildSheetPrompt(spec, finish, plan || { walls: [] }, extras.length, roomSize)
       : baseRender ? buildRerenderPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth))
@@ -361,10 +383,16 @@ export async function POST(request) {
     parts.push({ text: prompt });
 
     // Visible in the host's function logs, to check what the image model was asked for.
-    console.log("[render]", JSON.stringify({ view, wallIndex, dims, rerender: !!concept, extraPhotos: extras.length, finish, plan: plan && plan.walls.map(planWallText), spec }));
+    console.log("[render]", JSON.stringify({ view, wallIndex, dims, roomImage: !!roomImage, rerender: !!concept, extraPhotos: extras.length, finish, plan: plan && plan.walls.map(planWallText), spec }));
 
     const attempts = [MODEL, MODEL, ...FALLBACK_MODELS.filter((m) => m !== MODEL)];
-    const body = JSON.stringify({ contents: [{ parts }], generationConfig: { responseModalities: ["TEXT", "IMAGE"] } });
+    // Wall renders take the wall's own shape (width to ceiling height).
+    const aspectRatio = view === "wall" ? closestRatio(plan.walls[wallIndex].width, plan.ceiling) : null;
+    const makeBody = (withRatio) => JSON.stringify({
+      contents: [{ parts }],
+      generationConfig: { responseModalities: ["TEXT", "IMAGE"], ...(withRatio && aspectRatio && { imageConfig: { aspectRatio } }) },
+    });
+    let useRatio = true;
     let out = null;
     let lastError = BUSY_MESSAGE;
 
@@ -373,12 +401,22 @@ export async function POST(request) {
       if (i === 1) await sleep(1500); // brief pause before retrying the same model
       const model = attempts[i];
       try {
-        const r = await fetch(`${API_BASE}/${model}:generateContent?key=${key}`, {
+        let r = await fetch(`${API_BASE}/${model}:generateContent?key=${key}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body,
+          body: makeBody(useRatio),
         });
-        const j = await r.json();
+        let j = await r.json();
+        // A model that doesn't take an aspect ratio: ask again without it.
+        if (r.status === 400 && useRatio && aspectRatio && /aspect|image_?config/i.test(j?.error?.message || "")) {
+          useRatio = false;
+          r = await fetch(`${API_BASE}/${model}:generateContent?key=${key}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: makeBody(false),
+          });
+          j = await r.json();
+        }
         if (!r.ok) {
           console.log("[render] attempt failed", JSON.stringify({ model, status: r.status, error: j?.error?.message }));
           if (!RETRYABLE.has(r.status)) return Response.json({ error: j?.error?.message || "Gemini error" }, { status: r.status });

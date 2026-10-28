@@ -1,5 +1,6 @@
 "use client";
 import { useState, useRef } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import Elevation from "./Elevation";
 
 const STUDIO = "Thryve Growth";
@@ -51,6 +52,27 @@ const crop = (src, x, y, w, h) =>
     };
     img.onerror = () => resolve(null);
     img.src = src;
+  });
+
+// Draw a wall's bare plan elevation (wall and joinery only) to a JPEG, as the layout guide for
+// that wall's render.
+const planImage = (wall, plan, max = 1280) =>
+  new Promise((resolve) => {
+    const svg = renderToStaticMarkup(<Elevation bare wall={wall} ceiling={plan.ceiling} colour={plan.colour} />);
+    const img = new Image();
+    img.onload = () => {
+      const s = max / Math.max(wall.width, plan.ceiling);
+      const c = document.createElement("canvas");
+      c.width = Math.round(wall.width * s);
+      c.height = Math.round(plan.ceiling * s);
+      const g = c.getContext("2d");
+      g.fillStyle = "#FFFFFF";
+      g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL("image/jpeg", 0.9));
+    };
+    img.onerror = () => resolve(null);
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   });
 
 const CHIPS = [
@@ -226,18 +248,24 @@ export default function Page() {
       return;
     }
 
-    // 2b. The room view on the overview photo, then each wall as a face-on reframing of it.
+    // 2b. The room view on the overview photo, then each wall built from its plan drawing.
     const room = await renderView("wide", { ...common, view: "wide", imageBase64: photo, extraImages: small.slice(1) });
     const base = room || views.wide?.img;
     if (!base || !p) {
       setViews((v) => ({ ...v, ...Object.fromEntries(ids.map((id) => [id, { ...v[id], loading: false, err: "The room view needs to render first. Try re-rendering." }])) }));
       return;
     }
-    const baseImg = await shrink(base, 1280, 0.9);
+    // Each wall: its to-scale plan drawing sets the layout, the room view sets the look.
+    const roomImage = await shrink(base, 1024, 0.85);
+    const guides = await Promise.all(p.walls.map((w) => planImage(w, p)));
     await Promise.all(
       ids.map(async (id, i) => {
         await sleep(i * 400); // stagger starts so the image API isn't hit all at once
-        return renderView(id, { ...common, view: "wall", wallIndex: i, imageBase64: baseImg, baseRender: undefined });
+        if (!guides[i]) {
+          setViews((v) => ({ ...v, [id]: { ...v[id], loading: false, err: "Couldn't draw this wall's plan. Try re-rendering." } }));
+          return null;
+        }
+        return renderView(id, { ...common, view: "wall", wallIndex: i, imageBase64: guides[i], roomImage, baseRender: undefined });
       }),
     );
   };

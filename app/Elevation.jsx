@@ -70,7 +70,9 @@ function fitLabel(type, width, fs) {
   return [s.length <= max ? s : `${s.slice(0, Math.max(2, max - 1))}.`];
 }
 
-export default function Elevation({ wall, ceiling = 2400, colour = "#E8E2D6", finish }) {
+// `bare` draws only the wall and joinery, cropped to the wall edges, with no dimensions or
+// labels: the layout guide sent to the image model for that wall's render.
+export default function Elevation({ wall, ceiling = 2400, colour = "#E8E2D6", finish, bare = false }) {
   if (!wall) return null;
   const H = ceiling;
   const W = wall.width;
@@ -343,6 +345,16 @@ export default function Elevation({ wall, ceiling = 2400, colour = "#E8E2D6", fi
 
   const summary = `${wall.name}: front elevation, ${W} mm wide with a ${H} mm ceiling${finish ? `, in ${finish}` : ""}. ` +
     `Left to right: ${sections.map((s) => `${(SECTION_TYPES[s.type] || s.type).toLowerCase()} ${s.width} mm`).join(", ")}.`;
+
+  if (bare) {
+    return (
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} width={W} height={H}>
+        <rect x={0} y={0} width={W} height={H} fill={WALL} />
+        {parts}
+        <rect x={0} y={0} width={W} height={H} fill="none" stroke={INK} {...line(1.4)} />
+      </svg>
+    );
+  }
 
   return (
     <svg
