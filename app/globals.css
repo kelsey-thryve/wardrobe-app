@@ -127,10 +127,6 @@ input.field { width:100%; border:1px solid var(--line); background:#FBF8F2; bord
 .dim span { flex:1; color:var(--ink); }
 .dim input { width:110px; border:1px solid var(--line); background:#FBF8F2; border-radius:3px; padding:7px 9px; font:inherit; color:var(--ink); }
 .dim input:focus { outline:none; border-color:var(--brass); }
-.method { display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; margin-top:8px; font-size:13px; }
-.method .lbl { margin:0; }
-.method label { display:inline-flex; gap:5px; align-items:center; cursor:pointer; }
-.method input { accent-color:var(--brand); }
 .planview { display:flex; flex-direction:column; gap:18px; background:#fff; border:1px solid var(--line); border-radius:3px; padding:14px; }
 .planview h4 { margin:0 0 6px; font-size:14px; font-weight:600; }
 .planview .note { font-size:12px; color:var(--muted); margin:0; }
