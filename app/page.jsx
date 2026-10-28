@@ -111,6 +111,11 @@ const layoutGuide = async (photoSrc, plan) => {
   return c.toDataURL("image/jpeg", 0.9);
 };
 
+// Walls that get their own face-on render. The room view already looks straight at the back
+// wall, so it only appears there and in the Plan; the side walls, seen at a steep angle from
+// the doorway, get their own views.
+const faceOnWalls = (walls) => walls.map((w, i) => (/back/i.test(w.name) ? null : `w${i}`)).filter(Boolean);
+
 const CHIPS = [
   "Full-height hanging rails",
   "Bank of soft-close drawers",
@@ -212,8 +217,8 @@ export default function Page() {
   };
 
   // Walk-in views: the room view, each wall face-on, and the to-scale plan drawings.
-  const wallCount = plan?.walls.length || 3;
-  const viewIds = walkIn ? ["wide", ...Array.from({ length: wallCount }, (_, i) => `w${i}`), "plan"] : ["main"];
+  const wallIds = plan ? faceOnWalls(plan.walls) : ["w0", "w2"];
+  const viewIds = walkIn ? ["wide", ...wallIds, "plan"] : ["main"];
   const viewLabel = (id) =>
     id === "wide" ? "Room view" : id === "main" ? "Your render" : id === "plan" ? "Plan"
       : plan?.walls[Number(id.slice(1))]?.name || WALL_NAMES[Number(id.slice(1))];
@@ -266,7 +271,7 @@ export default function Page() {
     } catch {}
     const p = shared.plan || null;
     setPlan(p);
-    const ids = (p?.walls || []).map((_, i) => `w${i}`);
+    const ids = faceOnWalls(p?.walls || []);
     setViews((v) => ({
       ...Object.fromEntries(Object.entries(v).filter(([id]) => !/^w\d/.test(id) || ids.includes(id))),
       plan: { loading: false, err: p ? null : "Couldn't work out the layout. Try re-rendering." },
@@ -299,8 +304,9 @@ export default function Page() {
     const roomImage = await shrink(base, 1024, 0.85);
     const guides = await Promise.all(p.walls.map((w) => planImage(w, p)));
     await Promise.all(
-      ids.map(async (id, i) => {
-        await sleep(i * 400); // stagger starts so the image API isn't hit all at once
+      ids.map(async (id, k) => {
+        const i = Number(id.slice(1));
+        await sleep(k * 400); // stagger starts so the image API isn't hit all at once
         if (!guides[i]) {
           setViews((v) => ({ ...v, [id]: { ...v[id], loading: false, err: "Couldn't draw this wall's plan. Try re-rendering." } }));
           return null;
