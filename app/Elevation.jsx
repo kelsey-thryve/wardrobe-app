@@ -39,13 +39,16 @@ function shade(hex, amt) {
   return `#${ch((n >> 16) & 255)}${ch((n >> 8) & 255)}${ch(n & 255)}`;
 }
 
+// Visible width of a line; a trailing comma can hang into the margin.
+const len = (l) => l.replace(/,$/, "").length;
+
 // Greedy word wrap to a character budget.
 function wrap(text, max) {
   const lines = [];
   let line = "";
   for (const word of text.split(" ")) {
     const next = line ? `${line} ${word}` : word;
-    if (next.length <= max || !line) line = next;
+    if (len(next) <= max || !line) line = next;
     else {
       lines.push(line);
       line = word;
@@ -60,9 +63,9 @@ function fitLabel(type, width, fs) {
   const max = Math.max(3, Math.floor(width / (fs * 0.56)));
   const full = (SECTION_TYPES[type] || type).replace(/ \(no joinery\)/, "");
   let lines = wrap(full, max);
-  if (lines.length <= 2 && lines.every((l) => l.length <= max)) return lines;
+  if (lines.length <= 2 && lines.every((l) => len(l) <= max)) return lines;
   lines = wrap(SHORT[type] || full, max);
-  if (lines.length <= 3 && lines.every((l) => l.length <= max)) return lines;
+  if (lines.length <= 3 && lines.every((l) => len(l) <= max)) return lines;
   const s = SHORT[type] || full;
   return [s.length <= max ? s : `${s.slice(0, Math.max(2, max - 1))}.`];
 }
