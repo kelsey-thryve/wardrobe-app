@@ -2,7 +2,7 @@
 import { useState, useRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import Elevation from "./Elevation";
-import { drawWarped } from "../lib/warp";
+import { drawUnwarped, drawWarped } from "../lib/warp";
 
 const STUDIO = "Thryve Growth";
 
@@ -93,6 +93,23 @@ const layoutGuide = async (photoSrc, plan) => {
   g.globalAlpha = 0.94;
   g.drawImage(layer, 0, 0);
   g.globalAlpha = 1;
+  return c.toDataURL("image/jpeg", 0.9);
+};
+
+// A wall cut out of the room view at its corners and straightened to its true proportions
+// (width x ceiling), so the face-on render starts from exactly what the room view shows.
+const wallCut = async (roomSrc, wall, plan, max = 1280) => {
+  if (!wall.outline) return null;
+  const room = await loadImage(roomSrc);
+  if (!room) return null;
+  const s = max / Math.max(wall.width, plan.ceiling);
+  const c = document.createElement("canvas");
+  c.width = Math.round(wall.width * s);
+  c.height = Math.round(plan.ceiling * s);
+  const g = c.getContext("2d");
+  g.fillStyle = "#FFFFFF"; // parts of the wall outside the room view stay blank
+  g.fillRect(0, 0, c.width, c.height);
+  drawUnwarped(g, room, wall.outline.map(([x, y]) => [x * room.width, y * room.height]), c.width, c.height);
   return c.toDataURL("image/jpeg", 0.9);
 };
 
@@ -272,9 +289,12 @@ export default function Page() {
       setViews((v) => ({ ...v, ...Object.fromEntries(ids.map((id) => [id, { ...v[id], loading: false, err: "The room view needs to render first. Try re-rendering." }])) }));
       return;
     }
-    // Each wall: its to-scale plan drawing sets the layout, the room view sets the look.
+    // Each wall: cut out of the room view and straightened, so it shows the same joinery at the
+    // same size; its to-scale plan drawing fills in anything the room view doesn't reach. A wall
+    // without corners falls back to rendering from its plan drawing in the room view's style.
     const roomImage = await shrink(base, 1024, 0.85);
     const guides = await Promise.all(p.walls.map((w) => planImage(w, p)));
+    const cuts = await Promise.all(p.walls.map((w) => wallCut(base, w, p)));
     await Promise.all(
       ids.map(async (id, k) => {
         const i = Number(id.slice(1));
@@ -283,7 +303,9 @@ export default function Page() {
           setViews((v) => ({ ...v, [id]: { ...v[id], loading: false, err: "Couldn't draw this wall's plan. Try re-rendering." } }));
           return null;
         }
-        return renderView(id, { ...common, view: "wall", wallIndex: i, imageBase64: guides[i], roomImage, baseRender: undefined });
+        return cuts[i]
+          ? renderView(id, { ...common, view: "wall", wallIndex: i, imageBase64: cuts[i], planDrawing: guides[i], baseRender: undefined })
+          : renderView(id, { ...common, view: "wall", wallIndex: i, imageBase64: guides[i], roomImage, baseRender: undefined });
       }),
     );
   };

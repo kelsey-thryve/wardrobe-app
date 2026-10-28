@@ -203,6 +203,32 @@ function buildGuidedRoomPrompt(spec, finish, plan, hasConcept, size) {
 
 // Each wall is drawn from its own to-scale plan drawing (image 1) for layout and proportions,
 // and the approved room view (image 2) for materials and lighting, so it matches both.
+// A wall cut out of the room view and straightened (image 1), cleaned up into a face-on photo.
+function buildWallCutPrompt(spec, finish, plan, wallIndex, hasDrawing, size = SCALE_RULE) {
+  const wall = plan.walls[wallIndex];
+  return (
+    "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
+    `joinery studio. Image 1 is the ${wall.name.toLowerCase()} cut out of the approved render of ` +
+    "the customer's room and straightened to face-on: it is the whole wall edge to edge and " +
+    `floor to ceiling (${mm(wall.width)} wide, ${mm(plan.ceiling)} high). Because it was seen at ` +
+    "an angle it is stretched and blurry towards one end, and any part the room render didn't " +
+    "reach is blank white. " +
+    (hasDrawing ? "Image 2 is the to-scale layout drawing of the same wall. " : "") +
+    "Turn image 1 into a crisp, photorealistic, face-on photo of the SAME wall. Keep everything " +
+    "where it is in image 1: the same framing (the edges of the photo are the wall's corners, " +
+    "floor at the bottom, ceiling at the top), the same sections, shelves, drawers, rails, " +
+    "windows and doors at the same positions and sizes, and the same materials, colours, " +
+    "handles and lighting. Only sharpen what is blurry, undo the stretching, and fill blank " +
+    "areas by continuing the joinery" + (hasDrawing ? " as image 2 shows it" : "") + ". Do not add, remove, " +
+    "widen or move anything, and show no labels or dimension lines.\n\n" +
+    `This wall: ${planWallText(wall)}.\n` +
+    size +
+    finishLine(finish) +
+    `Wardrobe specification: ${spec}\n\n` +
+    "Render as a single photorealistic image."
+  );
+}
+
 function buildWallPrompt(spec, finish, plan, wallIndex, hasRoom, size = SCALE_RULE) {
   const wall = plan.walls[wallIndex];
   return (
@@ -396,7 +422,7 @@ export async function POST(request) {
       imageBase64, extraImages = [], mimeType = "image/jpeg", brief = "", messages = [], baseRender,
       // Walk-in mode: "planOnly" returns the shared plan; "wide" and "wall" render from it.
       planOnly = false, view = "match", wallIndex = 0, spec: givenSpec, finish: givenFinish, plan: givenPlan,
-      dims = {}, roomImage, layoutGuide,
+      dims = {}, roomImage, layoutGuide, planDrawing,
     } = await request.json();
 
     const key = process.env.GEMINI_API_KEY;
@@ -428,6 +454,7 @@ export async function POST(request) {
     const concept = baseRender && (view === "match" || view === "wide");
     const parts = [inline(imageBase64, mimeType), ...extras.map((img) => inline(img, mimeType))];
     if (view === "wall" && roomImage) parts.push(inline(roomImage, "image/jpeg"));
+    else if (view === "wall" && planDrawing) parts.push(inline(planDrawing, "image/jpeg"));
     if (guided) parts.push(inline(layoutGuide, "image/jpeg"));
     if (concept) parts.push(inline(baseRender, "image/png"));
     const widths = Array.isArray(dims.widths) ? dims.widths.map(Number) : [];
@@ -436,14 +463,15 @@ export async function POST(request) {
       ? `WALL WIDTHS (exact): ${plan.walls.map((w) => `${w.name.toLowerCase()} ${mm(w.width)}`).join(", ")}.\n` + sizeLine(undefined, ceiling, depth)
       : sizeLine(undefined, ceiling, depth);
     const prompt =
-      view === "wall" ? buildWallPrompt(spec, finish, plan, wallIndex, !!roomImage, sizeLine(plan.walls[wallIndex].width, ceiling, depth))
+      view === "wall" && !roomImage ? buildWallCutPrompt(spec, finish, plan, wallIndex, !!planDrawing, sizeLine(plan.walls[wallIndex].width, ceiling, depth))
+      : view === "wall" ? buildWallPrompt(spec, finish, plan, wallIndex, !!roomImage, sizeLine(plan.walls[wallIndex].width, ceiling, depth))
       : view === "wide" ? buildRoomPrompt(spec, finish, plan, extras.length, concept, roomSize, guided)
       : baseRender ? buildRerenderPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth))
       : buildPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth));
     parts.push({ text: prompt });
 
     // Visible in the host's function logs, to check what the image model was asked for.
-    console.log("[render]", JSON.stringify({ view, wallIndex, dims, roomImage: !!roomImage, guided, rerender: !!concept, extraPhotos: extras.length, finish, plan: plan && plan.walls.map(planWallText), spec }));
+    console.log("[render]", JSON.stringify({ view, wallIndex, dims, roomImage: !!roomImage, fromRoomCut: view === "wall" && !roomImage, guided, rerender: !!concept, extraPhotos: extras.length, finish, plan: plan && plan.walls.map(planWallText), spec }));
 
     const attempts = [MODEL, MODEL, ...FALLBACK_MODELS.filter((m) => m !== MODEL)];
     // Wall renders take the wall's own shape (width to ceiling height).
