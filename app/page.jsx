@@ -2,6 +2,7 @@
 import { useState, useRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import Elevation from "./Elevation";
+import { drawWarped } from "../lib/warp";
 
 const STUDIO = "Thryve Growth";
 
@@ -75,6 +76,41 @@ const planImage = (wall, plan, max = 1280) =>
     img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   });
 
+const loadImage = (src) =>
+  new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+
+// The layout guide for the room view: the overview photo with each wall's plan drawing warped
+// onto that wall (at the corners the planner found), so the room view follows the same plan.
+const layoutGuide = async (photoSrc, plan) => {
+  const walls = plan.walls.filter((w) => w.outline);
+  if (!walls.length) return null;
+  const photo = await loadImage(photoSrc);
+  if (!photo) return null;
+  const c = document.createElement("canvas");
+  c.width = photo.width;
+  c.height = photo.height;
+  const g = c.getContext("2d");
+  g.drawImage(photo, 0, 0);
+  // Warp at full opacity on a separate layer (overlapping triangle edges would otherwise show
+  // as seams), then blend the layer over the photo once.
+  const layer = document.createElement("canvas");
+  layer.width = c.width;
+  layer.height = c.height;
+  for (const w of walls) {
+    const drawing = await loadImage(await planImage(w, plan, 900));
+    if (drawing) drawWarped(layer.getContext("2d"), drawing, w.outline.map(([x, y]) => [x * c.width, y * c.height]));
+  }
+  g.globalAlpha = 0.94;
+  g.drawImage(layer, 0, 0);
+  g.globalAlpha = 1;
+  return c.toDataURL("image/jpeg", 0.9);
+};
+
 const CHIPS = [
   "Full-height hanging rails",
   "Bank of soft-close drawers",
@@ -98,6 +134,7 @@ export default function Page() {
   const walkIn = wallChoice ?? photos.length > 1;
   const [method, setMethod] = useState("zoom"); // walk-in: "zoom" from the room view, or one "sheet"
   const [plan, setPlan] = useState(null); // the walk-in layout plan every view is built from
+  const [guide, setGuide] = useState(null); // the plan drawn onto the overview photo
   const [views, setViews] = useState({}); // render per view id: { img, err, loading }
   const [active, setActive] = useState("main");
   const [widths, setWidths] = useState({}); // wall widths: "main", or "left" / "back" / "right"
@@ -248,8 +285,11 @@ export default function Page() {
       return;
     }
 
-    // 2b. The room view on the overview photo, then each wall built from its plan drawing.
-    const room = await renderView("wide", { ...common, view: "wide", imageBase64: photo, extraImages: small.slice(1) });
+    // 2b. The room view on the overview photo, following the plan drawn onto that photo, then
+    // each wall built from its own plan drawing. Both come from the same plan, so they match.
+    const g = p ? await layoutGuide(photo, p) : null;
+    setGuide(g);
+    const room = await renderView("wide", { ...common, view: "wide", imageBase64: photo, extraImages: small.slice(1), layoutGuide: g || undefined });
     const base = room || views.wide?.img;
     if (!base || !p) {
       setViews((v) => ({ ...v, ...Object.fromEntries(ids.map((id) => [id, { ...v[id], loading: false, err: "The room view needs to render first. Try re-rendering." }])) }));
@@ -289,6 +329,7 @@ export default function Page() {
     setStage("design");
     setActive(walkIn ? "wide" : "main");
     setPlan(null);
+    setGuide(null);
     setThinking(true);
     runRender(); // fire the images in parallel
     const opener = [{ role: "user", content: `Here is my brief: ${fullBrief()}. ${photos.length > 1 ? `The ${photos.length} attached photos show the actual space this wardrobe will be fitted into; the first is the main view.` : "The attached photo is the actual space this wardrobe will be fitted into."}` }];
@@ -455,6 +496,12 @@ export default function Page() {
                     return (
                       <div className="planview">
                         {v.loading && <p className="note">Working out the layout…</p>}
+                        {guide && (
+                          <div>
+                            <h4>Your plan in your room</h4>
+                            <img src={guide} alt="The planned wardrobe drawn onto your photo" style={{ width: "100%", borderRadius: 3, display: "block" }} />
+                          </div>
+                        )}
                         {!v.loading && v.err && <p className="note">{v.err}</p>}
                         {plan?.walls.map((w) => (
                           <div key={w.name}>
