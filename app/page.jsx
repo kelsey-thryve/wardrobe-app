@@ -40,21 +40,6 @@ const shrink = (src, max, quality) =>
 const WALL_KEYS = ["left", "back", "right"];
 const WALL_NAMES = ["Left wall", "Back wall", "Right wall"];
 
-// Cut a region (fractions of the image) out of a data URL, for slicing the one-image sheet.
-const crop = (src, x, y, w, h) =>
-  new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const c = document.createElement("canvas");
-      c.width = Math.round(img.width * w);
-      c.height = Math.round(img.height * h);
-      c.getContext("2d").drawImage(img, img.width * x, img.height * y, c.width, c.height, 0, 0, c.width, c.height);
-      resolve(c.toDataURL("image/jpeg", 0.92));
-    };
-    img.onerror = () => resolve(null);
-    img.src = src;
-  });
-
 // Draw a wall's bare plan elevation (wall and joinery only) to a JPEG, as the layout guide for
 // that wall's render.
 const planImage = (wall, plan, max = 1280) =>
@@ -111,6 +96,11 @@ const layoutGuide = async (photoSrc, plan) => {
   return c.toDataURL("image/jpeg", 0.9);
 };
 
+// Walls that get their own face-on render. The room view already looks straight at the back
+// wall, so it only appears there and in the Plan; the side walls, seen at a steep angle from
+// the doorway, get their own views.
+const faceOnWalls = (walls) => walls.map((w, i) => (/back/i.test(w.name) ? null : `w${i}`)).filter(Boolean);
+
 const CHIPS = [
   "Full-height hanging rails",
   "Bank of soft-close drawers",
@@ -132,7 +122,6 @@ export default function Page() {
   // Walk-in mode: photo 1 shows the whole room from the doorway. On by default with 2+ photos.
   const [wallChoice, setWallChoice] = useState(null);
   const walkIn = wallChoice ?? photos.length > 1;
-  const [method, setMethod] = useState("zoom"); // walk-in: "zoom" from the room view, or one "sheet"
   const [plan, setPlan] = useState(null); // the walk-in layout plan every view is built from
   const [guide, setGuide] = useState(null); // the plan drawn onto the overview photo
   const [views, setViews] = useState({}); // render per view id: { img, err, loading }
@@ -212,8 +201,8 @@ export default function Page() {
   };
 
   // Walk-in views: the room view, each wall face-on, and the to-scale plan drawings.
-  const wallCount = plan?.walls.length || 3;
-  const viewIds = walkIn ? ["wide", ...Array.from({ length: wallCount }, (_, i) => `w${i}`), "plan"] : ["main"];
+  const wallIds = plan ? faceOnWalls(plan.walls) : ["w0", "w2"];
+  const viewIds = walkIn ? ["wide", ...wallIds, "plan"] : ["main"];
   const viewLabel = (id) =>
     id === "wide" ? "Room view" : id === "main" ? "Your render" : id === "plan" ? "Plan"
       : plan?.walls[Number(id.slice(1))]?.name || WALL_NAMES[Number(id.slice(1))];
@@ -266,26 +255,14 @@ export default function Page() {
     } catch {}
     const p = shared.plan || null;
     setPlan(p);
-    const ids = (p?.walls || []).map((_, i) => `w${i}`);
+    const ids = faceOnWalls(p?.walls || []);
     setViews((v) => ({
       ...Object.fromEntries(Object.entries(v).filter(([id]) => !/^w\d/.test(id) || ids.includes(id))),
       plan: { loading: false, err: p ? null : "Couldn't work out the layout. Try re-rendering." },
     }));
     const common = { spec: shared.spec, finish: shared.finish, plan: p };
 
-    if (method === "sheet") {
-      // 2a. One image holding every view, sliced into the tabs (2 x 2 grid, room view top left).
-      const sheet = await renderView("sheet", { ...common, view: "sheet", imageBase64: photo, extraImages: small.slice(1), baseRender: undefined });
-      const cells = [["wide", 0, 0], ["w0", 0.5, 0], ["w1", 0, 0.5], ["w2", 0.5, 0.5]].filter(([id]) => id === "wide" || ids.includes(id));
-      const cut = sheet ? await Promise.all(cells.map(([, x, y]) => crop(sheet, x + 0.005, y + 0.005, 0.49, 0.49))) : [];
-      setViews((v) => ({
-        ...v,
-        ...Object.fromEntries(cells.map(([id], k) => [id, { img: cut[k] || v[id]?.img || null, err: sheet ? null : v.sheet?.err || "Render failed. Try again.", loading: false }])),
-      }));
-      return;
-    }
-
-    // 2b. The room view on the overview photo, following the plan drawn onto that photo, then
+    // 2. The room view on the overview photo, following the plan drawn onto that photo, then
     // each wall built from its own plan drawing. Both come from the same plan, so they match.
     const g = p ? await layoutGuide(photo, p) : null;
     setGuide(g);
@@ -299,8 +276,9 @@ export default function Page() {
     const roomImage = await shrink(base, 1024, 0.85);
     const guides = await Promise.all(p.walls.map((w) => planImage(w, p)));
     await Promise.all(
-      ids.map(async (id, i) => {
-        await sleep(i * 400); // stagger starts so the image API isn't hit all at once
+      ids.map(async (id, k) => {
+        const i = Number(id.slice(1));
+        await sleep(k * 400); // stagger starts so the image API isn't hit all at once
         if (!guides[i]) {
           setViews((v) => ({ ...v, [id]: { ...v[id], loading: false, err: "Couldn't draw this wall's plan. Try re-rendering." } }));
           return null;
@@ -421,16 +399,6 @@ export default function Page() {
                   <span>It's a walk-in: my main photo shows the whole room from the doorway. Show me the room fitted out, each wall face-on, and a to-scale plan. Extra photos can be close-ups.</span>
                 </label>
               )}
-              {walkIn && (
-                <div className="method" role="radiogroup" aria-label="How to draw the walls">
-                  <span className="lbl">Draw the walls by (testing):</span>
-                  {[["zoom", "Zooming in on the room view"], ["sheet", "One image with every view"]].map(([k, l]) => (
-                    <label key={k}>
-                      <input type="radio" name="method" checked={method === k} onChange={() => setMethod(k)} /> {l}
-                    </label>
-                  ))}
-                </div>
-              )}
               {photos.length > 0 && (
                 <div className="dims">
                   <p className="lbl">Measurements (mm), so the design fits your real room:</p>
@@ -506,7 +474,7 @@ export default function Page() {
                         {plan?.walls.map((w) => (
                           <div key={w.name}>
                             <h4>{w.name} · {w.width}mm</h4>
-                            <Elevation wall={w} ceiling={plan.ceiling} colour={plan.colour} finish={plan.finish} />
+                            <Elevation wall={w} ceiling={plan.ceiling} colour={plan.colour} finish={plan.finish} scaleTo={Math.max(...plan.walls.map((x) => x.width))} />
                           </div>
                         ))}
                         {plan && <p className="note">To-scale plan of the design{plan.finish ? ` in ${plan.finish}` : ""}. Every render is built from this layout; final sizes are confirmed at measure-up.</p>}

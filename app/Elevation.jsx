@@ -72,7 +72,8 @@ function fitLabel(type, width, fs) {
 
 // `bare` draws only the wall and joinery, cropped to the wall edges, with no dimensions or
 // labels: the layout guide sent to the image model for that wall's render.
-export default function Elevation({ wall, ceiling = 2400, colour = "#E8E2D6", finish, bare = false }) {
+// scaleTo: the widest wall on the plan, so every wall is drawn at the same scale (and text size).
+export default function Elevation({ wall, ceiling = 2400, colour = "#E8E2D6", finish, bare = false, scaleTo }) {
   if (!wall) return null;
   const H = ceiling;
   const W = wall.width;
@@ -81,7 +82,8 @@ export default function Elevation({ wall, ceiling = 2400, colour = "#E8E2D6", fi
   const Y = (mm) => H - mm; // height above floor -> SVG y
 
   // Text grows more slowly than the drawing so small and large walls both stay legible.
-  const extent = Math.max(W, H);
+  const ref = Math.max(scaleTo || 0, W);
+  const extent = Math.max(ref, H);
   const fs = 92 * Math.sqrt(extent / 2400);
   const unit = fs / 2.4;
   const mL = unit * 9;
@@ -361,7 +363,7 @@ export default function Elevation({ wall, ceiling = 2400, colour = "#E8E2D6", fi
       viewBox={`${-mL} ${-mT} ${W + mL + mR} ${H + mT + mB}`}
       role="img"
       aria-label={summary}
-      style={{ width: "100%", height: "auto", display: "block", fontFamily: "inherit" }}
+      style={{ width: `${(100 * (W + mL + mR)) / (ref + mL + mR)}%`, height: "auto", display: "block", fontFamily: "inherit" }}
     >
       <title>{summary}</title>
       <rect x={0} y={0} width={W} height={H} fill={WALL} />

@@ -1,6 +1,6 @@
 // Server-side render: the browser NEVER sees the Gemini key.
 // Browser -> this route (holds key) -> Gemini image API -> image back.
-import { normalisePlan, planWallText } from "../../../lib/plan";
+import { cleanOutline, normalisePlan, planWallText } from "../../../lib/plan";
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // renders can take 10-30s
@@ -241,31 +241,6 @@ function closestRatio(w, h) {
   });
 }
 
-// One image holding every view, so they come from a single generation and match. The browser
-// slices it into a 2 x 2 grid: room view top left, then the walls in reading order.
-function buildSheetPrompt(spec, finish, plan, closeups, size = SCALE_RULE) {
-  const panels = ["top right", "bottom left", "bottom right"];
-  const walls = plan.walls.slice(0, 3);
-  return (
-    "You are a photorealistic interior render engine for a bespoke fitted-wardrobe " +
-    "joinery studio. Image 1 is the customer's room photographed from the doorway" +
-    (closeups ? "; the other images are close-ups of the same room, for detail only" : "") + ". " +
-    "Design the custom fitted wardrobe for this room following the layout below, and produce " +
-    "ONE image laid out as a 2 x 2 grid of four equal panels separated by thin white gutters, " +
-    "with no text or labels. Top left: the room from exactly the camera angle of image 1 with " +
-    "the wardrobe built in. " +
-    walls.map((w, i) => `${panels[i][0].toUpperCase() + panels[i].slice(1)}: the ${w.name.toLowerCase()} face-on, camera square to the wall, floor to ceiling.`).join(" ") +
-    (walls.length < 3 ? " Leave any unused panel plain white." : "") +
-    " All panels show the SAME room and the SAME joinery: identical finish, sections, handles, " +
-    "lighting and flooring. Keep the room's real windows, doors, ceiling and proportions.\n\n" +
-    planLines(plan) +
-    size +
-    finishLine(finish) +
-    `Wardrobe specification: ${spec}\n\n` +
-    "Return the single 2 x 2 image."
-  );
-}
-
 // Merge the original brief and the designer chat into one up-to-date spec, so changes
 // agreed in the chat (e.g. "make it American walnut") actually reach the image model.
 async function consolidateSpec(key, brief, messages) {
@@ -368,12 +343,58 @@ async function planLayout(key, brief, messages, images, dims) {
   }
 }
 
+const wallSide = (name) => (/left/i.test(name) ? "left" : /right/i.test(name) ? "right" : /back|rear|end/i.test(name) ? "back" : null);
+
+// Walk-in mode: where the left, back and right walls sit in the doorway photo, as four
+// corners each (fractions of the image), so the plan can be drawn onto the photo.
+async function findWalls(key, image) {
+  if (!image) return {};
+  try {
+    const { ok, text } = await askText(key, {
+      systemInstruction: {
+        parts: [{
+          text:
+            "You locate the walls of a room in a photo taken from its doorway. Find the corners " +
+            "where the walls meet each other, the ceiling and the floor. Return ONLY JSON:\n" +
+            '{"left": Q, "back": Q, "right": Q} where each Q is {"top_left": [x, y], ' +
+            '"top_right": [x, y], "bottom_right": [x, y], "bottom_left": [x, y]} or null if that ' +
+            "wall isn't visible.\n" +
+            "x and y are integers from 0 to 1000 across the image's width and down its height " +
+            "(0,0 is the top-left of the image). The back wall faces the camera. The left wall " +
+            "runs from the camera to the back wall on the left: its right edge is the corner " +
+            "where it meets the back wall, its left edge is nearest the camera. The right wall " +
+            "mirrors it: its left edge is the corner with the back wall. Top corners are where " +
+            "a wall meets the ceiling, bottom corners where it meets the floor. The left wall's " +
+            "right edge and the back wall's left edge are the same vertical corner line, and " +
+            "likewise on the right. Corners nearest the camera are often out of frame: give " +
+            "their position extended past the edge of the image (below 0 or above 1000). " +
+            "Locate the real corner lines in the photo; furniture and clutter don't move them.",
+        }],
+      },
+      contents: [{ role: "user", parts: [inline(image, "image/jpeg"), { text: "Locate the walls." }] }],
+      generationConfig: { maxOutputTokens: 1024, temperature: 0, responseMimeType: "application/json" },
+    });
+    if (!ok || !text) return {};
+    const raw = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+    const out = {};
+    for (const side of ["left", "back", "right"]) {
+      const q = raw?.[side];
+      const pts = q && ["top_left", "top_right", "bottom_right", "bottom_left"].map((k) => q[k]);
+      const o = pts && cleanOutline(pts.map((p) => (Array.isArray(p) ? [p[0] / 1000, p[1] / 1000] : null)));
+      if (o) out[side] = o;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export async function POST(request) {
   const started = Date.now();
   try {
     const {
       imageBase64, extraImages = [], mimeType = "image/jpeg", brief = "", messages = [], baseRender,
-      // Walk-in mode: "planOnly" returns the shared plan; "wide", "wall" and "sheet" render from it.
+      // Walk-in mode: "planOnly" returns the shared plan; "wide" and "wall" render from it.
       planOnly = false, view = "match", wallIndex = 0, spec: givenSpec, finish: givenFinish, plan: givenPlan,
       dims = {}, roomImage, layoutGuide,
     } = await request.json();
@@ -383,7 +404,13 @@ export async function POST(request) {
 
     if (planOnly) {
       const images = [imageBase64, ...extraImages].filter(Boolean);
-      return Response.json(await planLayout(key, brief, messages, images, dims));
+      // The wall corners come from their own focused call, run alongside the design.
+      const [out, corners] = await Promise.all([planLayout(key, brief, messages, images, dims), findWalls(key, images[0])]);
+      if (out.plan) {
+        out.plan.walls = out.plan.walls.map((w) => ({ ...w, outline: corners[wallSide(w.name)] || w.outline }));
+        console.log("[plan] outlines", JSON.stringify(out.plan.walls.map((w) => [w.name, w.outline])));
+      }
+      return Response.json(out);
     }
     if (!imageBase64) return Response.json({ error: "Missing image" }, { status: 400 });
 
@@ -393,7 +420,7 @@ export async function POST(request) {
       : hasChat ? await consolidateSpec(key, brief, messages) : { finish: null, spec: brief };
 
     // Always render from the room photo; a previous render only guides the layout.
-    const walkIn = view === "wide" || view === "wall" || view === "sheet";
+    const walkIn = view === "wide" || view === "wall";
     const plan = walkIn ? normalisePlan(givenPlan, { widths: dims.widths, ceiling: dims.ceiling }) : null;
     if (view === "wall" && !plan?.walls[wallIndex]) return Response.json({ error: "Missing layout plan" }, { status: 400 });
     const guided = view === "wide" && !!layoutGuide;
@@ -411,7 +438,6 @@ export async function POST(request) {
     const prompt =
       view === "wall" ? buildWallPrompt(spec, finish, plan, wallIndex, !!roomImage, sizeLine(plan.walls[wallIndex].width, ceiling, depth))
       : view === "wide" ? buildRoomPrompt(spec, finish, plan, extras.length, concept, roomSize, guided)
-      : view === "sheet" ? buildSheetPrompt(spec, finish, plan || { walls: [] }, extras.length, roomSize)
       : baseRender ? buildRerenderPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth))
       : buildPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth));
     parts.push({ text: prompt });
