@@ -144,9 +144,14 @@ export default function Page() {
   useEffect(() => {
     if (!new URLSearchParams(window.location.search).has("embed") || window.parent === window) return;
     setEmbed(true);
-    const post = () => window.parent.postMessage({ type: "designer-height", height: Math.ceil(document.documentElement.scrollHeight) }, "*");
+    // Measure our own content: the document's scroll height never drops below the frame's height,
+    // so it could grow the frame but never shrink it.
+    const post = () => {
+      const el = rootRef.current || document.body;
+      window.parent.postMessage({ type: "designer-height", height: Math.ceil(el.getBoundingClientRect().height) }, "*");
+    };
     const ro = new ResizeObserver(post);
-    ro.observe(document.body);
+    ro.observe(rootRef.current || document.body);
     post();
     return () => ro.disconnect();
   }, []);
