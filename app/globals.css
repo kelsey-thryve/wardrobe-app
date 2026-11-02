@@ -1,4 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Instrument+Sans:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Gloock&family=Hanken+Grotesk:wght@400;600;700&display=swap');
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -131,3 +132,38 @@ input.field { width:100%; border:1px solid var(--line); background:#FBF8F2; bord
 .planview h4 { margin:0 0 6px; font-size:14px; font-weight:600; }
 .planview .note { font-size:12px; color:var(--muted); margin:0; }
 .render.fit:has(> img) { background:#EFE9DE; }
+
+/* Space picker (clients that offer closet / garage). */
+.spaces { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:0 0 14px; }
+.spaces-lbl { font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin-right:4px; }
+
+/* Embedded in a client's own website (?embed=1): no header, no page background. */
+.wrap.embed { min-height:0; background:transparent; }
+.wrap.embed .inner { padding:0; max-width:none; }
+
+/* Custom Closet Guys (NEXT_PUBLIC_CLIENT=ccg): gold, black and white, Gloock + Hanken Grotesk. */
+.wrap[data-client="ccg"] {
+  --ink:#111111; --paper:#FFFFFF; --card:#FFFFFF; --brass:#F5C258;
+  --brand:#111111; --brand-dark:#000000; --walnut:#8A6512; --line:#E4E2DD; --muted:#6B6A66;
+  font-family:'Hanken Grotesk', 'Helvetica Neue', Arial, sans-serif;
+}
+.wrap[data-client="ccg"] .logo-text,
+.wrap[data-client="ccg"] .hero h1,
+.wrap[data-client="ccg"] .steph,
+.wrap[data-client="ccg"] .done h2 { font-family:'Gloock', Georgia, serif; font-weight:400; color:var(--ink); }
+.wrap[data-client="ccg"] .stepnum { font-family:'Hanken Grotesk', sans-serif; font-weight:700; font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink); }
+.wrap[data-client="ccg"] .panel { border-top:3px solid var(--brass); border-radius:0; }
+.wrap[data-client="ccg"] .drop,
+.wrap[data-client="ccg"] .msg.a,
+.wrap[data-client="ccg"] .package,
+.wrap[data-client="ccg"] .thumb,
+.wrap[data-client="ccg"] .render.fit:has(> img) { background:#F6F6F6; }
+.wrap[data-client="ccg"] textarea,
+.wrap[data-client="ccg"] .chip,
+.wrap[data-client="ccg"] input.field,
+.wrap[data-client="ccg"] .composer input,
+.wrap[data-client="ccg"] .dim input { background:#FFFFFF; }
+.wrap[data-client="ccg"] .cta { border-radius:2px; }
+.wrap[data-client="ccg"] .cta.brass { color:#111111; }
+.wrap[data-client="ccg"] .cta.brass:hover { background:#E5B53F; }
+.wrap[data-client="ccg"] .done .tick { color:var(--brass); }

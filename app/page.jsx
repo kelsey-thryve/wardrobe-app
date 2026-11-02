@@ -1,22 +1,14 @@
 "use client";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import Elevation from "./Elevation";
 import { drawUnwarped, drawWarped } from "../lib/warp";
-
-const STUDIO = "Thryve Growth";
+import { client, toMm, fmtLen } from "../lib/client";
 
 const MAX_PHOTOS = 5;
 const RENDER_EXTRA_PHOTOS = 2; // extra views sent with a render; keeps the request under the host's size limit
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Read a measurement in mm; small numbers are taken as metres ("2.4" -> 2400).
-const toMm = (v) => {
-  const n = Number(String(v || "").replace(/[^\d.]/g, ""));
-  if (!n) return null;
-  const mm = n <= 20 ? n * 1000 : n;
-  return mm >= 300 && mm <= 15000 ? Math.round(mm) : null;
-};
 
 // Downsize a data URL to a JPEG, for context photos and previous renders sent back to the server.
 const shrink = (src, max, quality) =>
@@ -118,14 +110,8 @@ const wallCut = async (roomSrc, wall, plan, max = 1280) => {
 // the doorway, get their own views.
 const faceOnWalls = (walls) => walls.map((w, i) => (/back/i.test(w.name) ? null : `w${i}`)).filter(Boolean);
 
-const CHIPS = [
-  "Full-height hanging rails",
-  "Bank of soft-close drawers",
-  "Open cube shelves",
-  "Dedicated shoe racks",
-  "Integrated LED lighting",
-  "Full-length mirror",
-];
+const INCH = client.units === "in";
+const DIM_HINT = INCH ? { width: "e.g. 96", ceiling: "e.g. 8'", depth: "e.g. 72" } : { width: "e.g. 2400", ceiling: "e.g. 2400", depth: "e.g. 1800" };
 
 export default function Page() {
   const [photos, setPhotos] = useState([]); // first photo is the main view the render is built on
@@ -138,7 +124,7 @@ export default function Page() {
   const [thinking, setThinking] = useState(false);
   // Walk-in mode: photo 1 shows the whole room from the doorway. On by default with 2+ photos.
   const [wallChoice, setWallChoice] = useState(null);
-  const walkIn = wallChoice ?? photos.length > 1;
+  const walkIn = (wallChoice ?? photos.length > 1);
   const [plan, setPlan] = useState(null); // the walk-in layout plan every view is built from
   const [guide, setGuide] = useState(null); // the plan drawn onto the overview photo
   const [views, setViews] = useState({}); // render per view id: { img, err, loading }
@@ -147,7 +133,30 @@ export default function Page() {
   const [ceiling, setCeiling] = useState("");
   const [depth, setDepth] = useState("");
   const [lead, setLead] = useState({ name: "", email: "", phone: "", suburb: "" });
+  const [space, setSpace] = useState("closet"); // closet | garage (clients with spaces only)
+  const [embed, setEmbed] = useState(false); // ?embed=1: inside another site's page, no header
   const fileRef = useRef(null);
+  const rootRef = useRef(null);
+  const chips = client.chips[space] || client.chips.closet;
+  const garage = space === "garage";
+
+  // Embedded: drop the header and tell the host page our height so its frame fits.
+  useEffect(() => {
+    if (!new URLSearchParams(window.location.search).has("embed") || window.parent === window) return;
+    setEmbed(true);
+    const post = () => window.parent.postMessage({ type: "designer-height", height: Math.ceil(document.documentElement.scrollHeight) }, "*");
+    const ro = new ResizeObserver(post);
+    ro.observe(document.body);
+    post();
+    return () => ro.disconnect();
+  }, []);
+
+  const pickSpace = (id) => {
+    if (id === space) return;
+    setSpace(id);
+    setPicked([]);
+    setWallChoice(id === "garage" ? false : null);
+  };
 
   // Shrink a photo to a JPEG data URL so several fit in one request.
   const compress = (f) =>
@@ -200,12 +209,14 @@ export default function Page() {
     depth: walkIn ? toMm(depth) : null,
   });
 
-  const measurements = () => {
+  // The AI works in mm; `shown` gives the same sentence in the client's units for the lead email.
+  const measurements = (shown = false) => {
     const d = dims();
+    const L = (n) => (shown ? fmtLen(n) : `${n}mm`);
     const walls = walkIn
-      ? d.widths.map((w, i) => (w ? `${WALL_NAMES[i].toLowerCase()} is ${w}mm wide` : null)).filter(Boolean)
-      : d.widths[0] ? [`the wall is ${d.widths[0]}mm wide`] : [];
-    const all = [...walls, d.ceiling && `ceiling height ${d.ceiling}mm`, d.depth && `room depth ${d.depth}mm`].filter(Boolean);
+      ? d.widths.map((w, i) => (w ? `${WALL_NAMES[i].toLowerCase()} is ${L(w)} wide` : null)).filter(Boolean)
+      : d.widths[0] ? [`the wall is ${L(d.widths[0])} wide`] : [];
+    const all = [...walls, d.ceiling && `ceiling height ${L(d.ceiling)}`, d.depth && `room depth ${L(d.depth)}`].filter(Boolean);
     return all.length ? `Measurements: ${all.join(", ")}` : "";
   };
 
@@ -236,6 +247,7 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mimeType: "image/jpeg",
+          space,
           brief: fullBrief(),
           messages,
           dims: dims(),
@@ -266,7 +278,7 @@ export default function Page() {
       const res = await fetch("/api/render", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planOnly: true, imageBase64: small[0], extraImages: small.slice(1), brief: fullBrief(), messages, dims: dims() }),
+        body: JSON.stringify({ space, planOnly: true, imageBase64: small[0], extraImages: small.slice(1), brief: fullBrief(), messages, dims: dims() }),
       });
       shared = await res.json();
     } catch {}
@@ -315,7 +327,7 @@ export default function Page() {
       const res = await fetch("/api/design", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: msgs, imageBase64: photo, extraImages: photos.slice(1) }),
+        body: JSON.stringify({ space, messages: msgs, imageBase64: photo, extraImages: photos.slice(1) }),
       });
       const data = await res.json();
       return data.text || "Tell me a bit more about the space — wall width and ceiling height are the two the studio needs first.";
@@ -332,7 +344,7 @@ export default function Page() {
     setGuide(null);
     setThinking(true);
     runRender(); // fire the images in parallel
-    const opener = [{ role: "user", content: `Here is my brief: ${fullBrief()}. ${photos.length > 1 ? `The ${photos.length} attached photos show the actual space this wardrobe will be fitted into; the first is the main view.` : "The attached photo is the actual space this wardrobe will be fitted into."}` }];
+    const opener = [{ role: "user", content: `Here is my brief: ${fullBrief()}. ${photos.length > 1 ? `The ${photos.length} attached photos show the actual space this ${garage ? "garage storage" : client.id === "thryve" ? "wardrobe" : "closet"} will be fitted into; the first is the main view.` : `The attached photo is the actual space this ${garage ? "garage storage" : client.id === "thryve" ? "wardrobe" : "closet"} will be fitted into.`}` }];
     const reply = await askDesigner(opener);
     setMessages([{ role: "assistant", content: reply }]);
     setThinking(false);
@@ -359,7 +371,7 @@ export default function Page() {
     await fetch("/api/lead", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...lead, spec: [...picked, ...(brief.trim() ? [brief.trim()] : [])], notes: fullBrief() }),
+      body: JSON.stringify({ ...lead, space, spec: [...picked, ...(brief.trim() ? [brief.trim()] : [])], notes: [picked.join(", "), brief.trim(), measurements(true)].filter(Boolean).join(". ") }),
     });
     setStage("done");
   };
@@ -367,20 +379,28 @@ export default function Page() {
   const spec = [...picked, ...(brief.trim() ? [brief.trim()] : [])];
 
   return (
-    <div className="wrap">
+    <div className={"wrap" + (embed ? " embed" : "")} data-client={client.id} ref={rootRef}>
       <div className="inner">
-        <div className="topbar">
-          <div className="logo-text">Thryve Growth</div>
-          <div className="tag">Bespoke fitted wardrobes · designed to your room</div>
-        </div>
+        {!embed && (
+          <div className="topbar">
+            <div className="logo-text">{client.studio}</div>
+            <div className="tag">{client.tagline}</div>
+          </div>
+        )}
 
-        {stage !== "done" && (
+        {stage !== "done" && !embed && (
           <div className="hero">
-            <h1>Your wardrobe, drawn to fit.</h1>
-            <p className="sub">
-              Upload photos of your space, shape the layout with our studio designer, and see it
-              in your own room. When it's right, request a quote from the joiners who'll build it.
-            </p>
+            <h1>{client.h1}</h1>
+            <p className="sub">{client.sub}</p>
+          </div>
+        )}
+
+        {stage === "intake" && client.spaces && (
+          <div className="spaces" role="group" aria-label="Which space?">
+            <span className="spaces-lbl">Which space?</span>
+            {client.spaces.map((sp) => (
+              <button key={sp.id} className={"vtab" + (space === sp.id ? " on" : "")} aria-pressed={space === sp.id} onClick={() => pickSpace(sp.id)}>{sp.label}</button>
+            ))}
           </div>
         )}
 
@@ -393,7 +413,7 @@ export default function Page() {
                 {photo ? <img src={photo} alt="Your space" /> : (
                   <>
                     <div className="ico">+</div>
-                    <div>Tap to upload a photo of your wall, alcove or closet</div>
+                    <div>{garage ? "Tap to upload a photo of your garage" : "Tap to upload a photo of your wall, alcove or closet"}</div>
                     <div style={{ fontSize: 12 }}>Add a few angles if you can</div>
                   </>
                 )}
@@ -415,7 +435,7 @@ export default function Page() {
               <p className="footnote" style={{ textAlign: "left", marginTop: 8 }}>
                 Add up to {MAX_PHOTOS} photos from different angles. The main photo is the view we design on; tap another photo to make it the main one.
               </p>
-              {photos.length > 0 && (
+              {photos.length > 0 && !garage && (
                 <label className="wallmode">
                   <input type="checkbox" checked={walkIn} onChange={(e) => setWallChoice(e.target.checked)} />
                   <span>It's a walk-in: my main photo shows the whole room from the doorway. Show me the room fitted out, each wall face-on, and a to-scale plan. Extra photos can be close-ups.</span>
@@ -423,21 +443,21 @@ export default function Page() {
               )}
               {photos.length > 0 && (
                 <div className="dims">
-                  <p className="lbl">Measurements (mm), so the design fits your real room:</p>
+                  <p className="lbl">Measurements ({INCH ? "inches, or feet like 8\'" : "mm"}), so the design fits your real room:</p>
                   {(walkIn ? WALL_KEYS : ["main"]).map((k, i) => (
                     <label key={k} className="dim">
                       <span>{walkIn ? `${WALL_NAMES[i]} width (from the doorway)` : "Wall width"}</span>
-                      <input inputMode="decimal" placeholder="e.g. 2400" value={widths[k] || ""} onChange={(e) => setWidths((w) => ({ ...w, [k]: e.target.value }))} />
+                      <input inputMode="decimal" placeholder={DIM_HINT.width} value={widths[k] || ""} onChange={(e) => setWidths((w) => ({ ...w, [k]: e.target.value }))} />
                     </label>
                   ))}
                   <label className="dim">
                     <span>Ceiling height</span>
-                    <input inputMode="decimal" placeholder="e.g. 2400" value={ceiling} onChange={(e) => setCeiling(e.target.value)} />
+                    <input inputMode="decimal" placeholder={DIM_HINT.ceiling} value={ceiling} onChange={(e) => setCeiling(e.target.value)} />
                   </label>
                   {walkIn && (
                     <label className="dim">
                       <span>Room depth (door to back wall)</span>
-                      <input inputMode="decimal" placeholder="e.g. 1800" value={depth} onChange={(e) => setDepth(e.target.value)} />
+                      <input inputMode="decimal" placeholder={DIM_HINT.depth} value={depth} onChange={(e) => setDepth(e.target.value)} />
                     </label>
                   )}
                 </div>
@@ -447,9 +467,9 @@ export default function Page() {
             <div className="col">
               <div className="stepnum">Step two</div>
               <div className="steph">Tell us what you need</div>
-              <p className="lbl">Add the essentials — tap any that apply:</p>
+              <p className="lbl">{client.id === "thryve" ? "Add the essentials — tap any that apply:" : "Add the essentials. Tap any that apply:"}</p>
               <div className="chips">
-                {CHIPS.map((c) => (
+                {chips.map((c) => (
                   <button key={c} className={"chip" + (picked.includes(c) ? " on" : "")} onClick={() => toggleChip(c)}>{c}</button>
                 ))}
               </div>
@@ -457,7 +477,7 @@ export default function Page() {
               <textarea
                 value={brief}
                 onChange={(e) => setBrief(e.target.value)}
-                placeholder="e.g. Mostly hanging with 4 drawers and a shoe rack at the base. Finish: warm oak with matte black rails."
+                placeholder={client.briefPlaceholder[space] || client.briefPlaceholder.closet}
               />
               <button className="cta" disabled={!photo || !fullBrief()} onClick={startDesign}>Generate my design</button>
             </div>
@@ -495,8 +515,8 @@ export default function Page() {
                         {!v.loading && v.err && <p className="note">{v.err}</p>}
                         {plan?.walls.map((w) => (
                           <div key={w.name}>
-                            <h4>{w.name} · {w.width}mm</h4>
-                            <Elevation wall={w} ceiling={plan.ceiling} colour={plan.colour} finish={plan.finish} scaleTo={Math.max(...plan.walls.map((x) => x.width))} />
+                            <h4>{w.name} · {fmtLen(w.width)}</h4>
+                            <Elevation wall={w} ceiling={plan.ceiling} colour={plan.colour} finish={plan.finish} scaleTo={Math.max(...plan.walls.map((x) => x.width))} fmt={INCH ? fmtLen : undefined} />
                           </div>
                         ))}
                         {plan && <p className="note">To-scale plan of the design{plan.finish ? ` in ${plan.finish}` : ""}. Every render is built from this layout; final sizes are confirmed at measure-up.</p>}
@@ -507,7 +527,7 @@ export default function Page() {
                     <div className={"render" + (walkIn ? " fit" : "")}>
                       {v.loading && (
                         <div className="loading">
-                          {walkIn ? (plan ? `Rendering the ${viewLabel(active).toLowerCase()}…` : "Planning the layout…") : "Rendering your wardrobe into the room…"}
+                          {walkIn ? (plan ? `Rendering the ${viewLabel(active).toLowerCase()}…` : "Planning the layout…") : `Rendering your ${garage ? "garage" : client.id === "thryve" ? "wardrobe" : "closet"} into the room…`}
                           <br />(10–30 seconds)
                         </div>
                       )}
@@ -558,26 +578,24 @@ export default function Page() {
         {stage === "quote" && (
           <div className="panel" style={{ padding: 24, maxWidth: 520, margin: "0 auto" }}>
             <div className="stepnum">Almost there</div>
-            <div className="steph">Where should the studio send your quote?</div>
+            <div className="steph">{client.quoteHeading}</div>
             <input className="field" placeholder="Full name" value={lead.name} onChange={(e) => setLead({ ...lead, name: e.target.value })} />
             <input className="field" placeholder="Email" value={lead.email} onChange={(e) => setLead({ ...lead, email: e.target.value })} />
             <input className="field" placeholder="Phone (optional)" value={lead.phone} onChange={(e) => setLead({ ...lead, phone: e.target.value })} />
-            <input className="field" placeholder="Suburb (optional)" value={lead.suburb} onChange={(e) => setLead({ ...lead, suburb: e.target.value })} />
-            <button className="cta brass" disabled={!lead.name || !lead.email} onClick={submitLead}>Send my design to the studio</button>
-            <p className="footnote" style={{ marginTop: 12 }}>Your photos, render and notes go straight to the workshop so they can price the exact build.</p>
+            <input className="field" placeholder={`${client.locality} (optional)`} value={lead.suburb} onChange={(e) => setLead({ ...lead, suburb: e.target.value })} />
+            <button className="cta brass" disabled={!lead.name || !lead.email} onClick={submitLead}>{client.sendLabel}</button>
+            <p className="footnote" style={{ marginTop: 12 }}>{client.quoteFoot}</p>
           </div>
         )}
 
         {stage === "done" && (
           <div className="panel done">
             <div className="tick">✦</div>
-            <h2>Your design is with the studio, {lead.name.split(" ")[0]}.</h2>
-            <p style={{ color: "var(--muted)", maxWidth: 440, margin: "0 auto" }}>
-              A joiner will review your space and come back with a fixed quote, usually within two working days.
-            </p>
+            <h2>{client.doneHeading(lead.name.split(" ")[0])}</h2>
+            <p style={{ color: "var(--muted)", maxWidth: 440, margin: "0 auto" }}>{client.doneText}</p>
             <div className="package">
               <div className="k">Requested features</div>
-              <p className="v">{spec.length ? spec.join(", ") : "Custom joinery"}</p>
+              <p className="v">{spec.length ? spec.join(", ") : client.id === "thryve" ? "Custom joinery" : "Custom design"}</p>
               <div className="k">Contact</div>
               <p className="v">{lead.name} · {lead.email}{lead.phone ? " · " + lead.phone : ""}{lead.suburb ? " · " + lead.suburb : ""}</p>
             </div>

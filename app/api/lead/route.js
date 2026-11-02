@@ -1,16 +1,19 @@
 // Lead capture: assembles the quote request and sends it to the studio.
 // If RESEND_API_KEY + LEAD_TO_EMAIL are set, it emails the lead. Otherwise it logs to the server.
+import { client } from "../../../lib/client";
+
 export const runtime = "nodejs";
 
 export async function POST(request) {
   try {
     const lead = await request.json();
     const summary =
-      `New wardrobe quote request\n\n` +
+      `${client.leadSubject}\n\n` +
+      (client.spaces && lead.space ? `Space:    ${lead.space}\n` : "") +
       `Name:     ${lead.name || "-"}\n` +
       `Email:    ${lead.email || "-"}\n` +
       `Phone:    ${lead.phone || "-"}\n` +
-      `Suburb:   ${lead.suburb || "-"}\n` +
+      `${(client.locality + ":").padEnd(10)}${lead.suburb || "-"}\n` +
       `Features: ${(lead.spec || []).join(", ") || "-"}\n` +
       `Notes:    ${lead.notes || "-"}\n`;
 
@@ -26,7 +29,7 @@ export async function POST(request) {
         body: JSON.stringify({
           from: process.env.LEAD_FROM_EMAIL || "leads@yourdomain.com",
           to: process.env.LEAD_TO_EMAIL,
-          subject: `New wardrobe quote request — ${lead.name || "lead"}`,
+          subject: client.id === "thryve" ? `New wardrobe quote request — ${lead.name || "lead"}` : `${client.leadSubject}: ${lead.name || "lead"}`,
           text: summary,
         }),
       });

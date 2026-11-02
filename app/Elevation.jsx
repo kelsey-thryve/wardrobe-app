@@ -73,7 +73,7 @@ function fitLabel(type, width, fs) {
 // `bare` draws only the wall and joinery, cropped to the wall edges, with no dimensions or
 // labels: the layout guide sent to the image model for that wall's render.
 // scaleTo: the widest wall on the plan, so every wall is drawn at the same scale (and text size).
-export default function Elevation({ wall, ceiling = 2400, colour = "#E8E2D6", finish, bare = false, scaleTo }) {
+export default function Elevation({ wall, ceiling = 2400, colour = "#E8E2D6", finish, bare = false, scaleTo, fmt = String }) {
   if (!wall) return null;
   const H = ceiling;
   const W = wall.width;
@@ -324,7 +324,7 @@ export default function Elevation({ wall, ceiling = 2400, colour = "#E8E2D6", fi
   const below = sections.map((s, i) => {
     const x0 = sx;
     sx += s.width;
-    const label = String(s.width);
+    const label = fmt(s.width);
     const size = Math.max(fs * 0.62, Math.min(fs * 0.9, s.width / (label.length * 0.62)));
     const lfs = fs * 0.78;
     const lines = fitLabel(s.type, s.width - 30, lfs);
@@ -375,12 +375,12 @@ export default function Elevation({ wall, ceiling = 2400, colour = "#E8E2D6", fi
 
       {ext("et0", 0, extTop - tick, -unit * 1)}
       {ext("et1", W, extTop - tick, -unit * 1)}
-      {dim("overall", 0, W, extTop, String(W))}
+      {dim("overall", 0, W, extTop, fmt(W))}
       {edges.map((px, i) => ext(`eb${i}`, px, H + unit * 1, extBot + tick))}
       {below}
       <line x1={-mL * 0.75} x2={-unit * 1} y1={0} y2={0} stroke={MUTED} {...line(0.5)} />
       <line x1={-mL * 0.75} x2={-unit * 1} y1={H} y2={H} stroke={MUTED} {...line(0.5)} />
-      {dim("ceiling", 0, H, -mL * 0.55, String(H), { vertical: true })}
+      {dim("ceiling", 0, H, -mL * 0.55, fmt(H), { vertical: true })}
     </svg>
   );
 }

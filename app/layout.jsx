@@ -1,8 +1,9 @@
 import "./globals.css";
+import { client } from "../lib/client";
 
 export const metadata = {
-  title: "Thryve Growth wardrobe app",
-  description: "Upload your space, shape the design, and get a quote from the studio that builds it.",
+  title: client.title,
+  description: client.description,
 };
 
 export default function RootLayout({ children }) {

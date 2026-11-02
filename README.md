@@ -69,6 +69,35 @@ Every render costs you, and cold clicks are low-intent. Before scaling ad spend:
 - Consider running **flash** live in-page and offering **pro** as an "HD render" reward
   *after* the visitor gives their details — expensive renders only fire on real leads.
 
+## Client mode (one codebase, a deployment per client)
+
+Set `NEXT_PUBLIC_CLIENT` in the host's environment variables to switch the whole app to a client's
+setup. Unset, it is the Thryve Growth demo exactly as before. Clients live in `lib/client.js`:
+brand words, units (mm or inches), feature chips, the consultant's question checklist, depth rules
+for the renderer and the space types offered.
+
+| `NEXT_PUBLIC_CLIENT` | What you get |
+| --- | --- |
+| *(unset)* | Thryve Growth wardrobe demo, mm |
+| `ccg` | Custom Closet Guys: closet or garage picker, inches and feet, US wording, their standard depths (16" hanging, 22" drawers, 12 or 16" shelves), gold/black theme, leads worded for Richard |
+
+To add a client, copy the `ccg` block in `lib/client.js` and give it a new id.
+
+## Embedding in a client's website
+
+Load the app in an iframe with `?embed=1` added to the URL. Embedded, it drops its own header and
+hero (the host page has its own) and posts its height to the parent page so the frame grows with it:
+
+```html
+<iframe id="designer" src="https://YOUR-DEPLOYMENT.vercel.app/?embed=1" style="width:100%;border:0;height:900px" title="Closet designer"></iframe>
+<script>
+  addEventListener("message", (e) => {
+    if (e.origin === "https://YOUR-DEPLOYMENT.vercel.app" && e.data && e.data.type === "designer-height")
+      document.getElementById("designer").style.height = e.data.height + "px";
+  });
+</script>
+```
+
 ## Customise per client
 
 - Brand: `STUDIO` constant + `.mark` wordmark in `app/page.jsx`; colours in `app/globals.css`.

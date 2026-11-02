@@ -2,6 +2,8 @@
 // Browser -> this route (holds key) -> Gemini image API -> image back.
 import { cleanOutline, normalisePlan, planWallText } from "../../../lib/plan";
 
+import { client, spaceOf } from "../../../lib/client";
+
 export const runtime = "nodejs";
 export const maxDuration = 60; // renders can take 10-30s
 
@@ -73,6 +75,9 @@ const SCALE_RULE =
   "sections that would not fit. Never mirror or flip a photo: windows, doors and corners " +
   "stay on the same side as in the photo.\n\n";
 
+// Filled in per request with the client's depth rules (lib/client.js).
+const DEPTH_TOKEN = "{{DEPTH_RULE}}";
+
 function sizeLine(width, ceiling, depth) {
   const w = validMm(width), h = validMm(ceiling), d = validMm(depth);
   if (!w && !h && !d) return SCALE_RULE;
@@ -86,7 +91,7 @@ function sizeLine(width, ceiling, depth) {
   const fit = [
     w && `split the wall into ${bays} section${bays > 1 ? "s" : ""} of about ${mm(w / bays)} each`,
     h && `run the joinery up to ${mm(h)}`,
-    "hanging sections are about 600mm deep",
+    DEPTH_TOKEN,
     d && `leave the rest of the ${mm(d)} depth as clear floor`,
   ].filter(Boolean).join(", ");
   return (
@@ -269,7 +274,8 @@ function closestRatio(w, h) {
 
 // Merge the original brief and the designer chat into one up-to-date spec, so changes
 // agreed in the chat (e.g. "make it American walnut") actually reach the image model.
-async function consolidateSpec(key, brief, messages) {
+async function consolidateSpec(key, brief, messages, space = "closet") {
+  const depthNote = client.id === "thryve" ? "" : ` Write sizes as the customer gave them (inches and feet). Build rules: ${client.depthRule(space)}.`;
   const transcript = messages
     .map((m) => `${m.role === "user" ? "Customer" : "Designer"}: ${m.content}`)
     .join("\n");
@@ -285,7 +291,7 @@ async function consolidateSpec(key, brief, messages) {
       systemInstruction: {
         parts: [{
           text:
-            "You turn a wardrobe design conversation into a render specification. Reply in " +
+            client.words("You turn a wardrobe design conversation into a render specification. Reply in ", space) +
             "exactly two lines and nothing else:\n" +
             "FINISH: <the timber or colour of the whole wardrobe, e.g. 'dark American walnut " +
             "timber veneer', or 'none' if never chosen>\n" +
@@ -293,7 +299,7 @@ async function consolidateSpec(key, brief, messages) {
             "hanging, drawers, shelves, extras and dimensions>\n" +
             "Where the customer changed their mind, use their LATEST choice and drop the old " +
             "one. If the customer agreed to a designer suggestion (e.g. said yes), include it. " +
-            "Do not mention anything that was replaced.",
+            "Do not mention anything that was replaced." + depthNote,
         }],
       },
       contents: [{ role: "user", parts: [{ text: `Original brief: ${brief}\n\nConversation:\n${transcript}` }] }],
@@ -315,7 +321,7 @@ const SECTION_LIST =
 
 // Walk-in mode: one exact layout plan for the whole room, from the brief, chat, photos and
 // measurements. Returns { finish, spec, plan } (plan normalised by lib/plan.js).
-async function planLayout(key, brief, messages, images, dims) {
+async function planLayout(key, brief, messages, images, dims, space = "closet") {
   const transcript = messages
     .map((m) => `${m.role === "user" ? "Customer" : "Designer"}: ${m.content}`)
     .join("\n");
@@ -329,7 +335,7 @@ async function planLayout(key, brief, messages, images, dims) {
       systemInstruction: {
         parts: [{
           text:
-            "You are the lead designer at a fitted-wardrobe joinery studio. Image 1 shows the " +
+            client.words("You are the lead designer at a fitted-wardrobe joinery studio. Image 1 shows the ", space) +
             "customer's walk-in room from the doorway; any other images are close-ups of it. " +
             "Design the fitted wardrobe and return ONLY JSON:\n" +
             '{"finish": "<timber or colour, e.g. light oak timber veneer>", "colour": "<hex of ' +
@@ -422,8 +428,9 @@ export async function POST(request) {
       imageBase64, extraImages = [], mimeType = "image/jpeg", brief = "", messages = [], baseRender,
       // Walk-in mode: "planOnly" returns the shared plan; "wide" and "wall" render from it.
       planOnly = false, view = "match", wallIndex = 0, spec: givenSpec, finish: givenFinish, plan: givenPlan,
-      dims = {}, roomImage, layoutGuide, planDrawing,
+      dims = {}, roomImage, layoutGuide, planDrawing, space: rawSpace,
     } = await request.json();
+    const space = spaceOf(rawSpace);
 
     const key = process.env.GEMINI_API_KEY;
     if (!key) return Response.json({ error: "Server not configured (GEMINI_API_KEY)" }, { status: 500 });
@@ -431,7 +438,7 @@ export async function POST(request) {
     if (planOnly) {
       const images = [imageBase64, ...extraImages].filter(Boolean);
       // The wall corners come from their own focused call, run alongside the design.
-      const [out, corners] = await Promise.all([planLayout(key, brief, messages, images, dims), findWalls(key, images[0])]);
+      const [out, corners] = await Promise.all([planLayout(key, brief, messages, images, dims, space), findWalls(key, images[0])]);
       if (out.plan) {
         out.plan.walls = out.plan.walls.map((w) => ({ ...w, outline: corners[wallSide(w.name)] || w.outline }));
         console.log("[plan] outlines", JSON.stringify(out.plan.walls.map((w) => [w.name, w.outline])));
@@ -443,7 +450,7 @@ export async function POST(request) {
     const hasChat = messages.some((m) => m.role === "user");
     const { finish, spec } = givenSpec
       ? { finish: givenFinish || null, spec: givenSpec }
-      : hasChat ? await consolidateSpec(key, brief, messages) : { finish: null, spec: brief };
+      : hasChat ? await consolidateSpec(key, brief, messages, space) : { finish: null, spec: brief };
 
     // Always render from the room photo; a previous render only guides the layout.
     const walkIn = view === "wide" || view === "wall";
@@ -468,7 +475,7 @@ export async function POST(request) {
       : view === "wide" ? buildRoomPrompt(spec, finish, plan, extras.length, concept, roomSize, guided)
       : baseRender ? buildRerenderPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth))
       : buildPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth));
-    parts.push({ text: prompt });
+    parts.push({ text: client.words(prompt.split(DEPTH_TOKEN).join(client.depthRule(space)), space) + client.extraRule(space) });
 
     // Visible in the host's function logs, to check what the image model was asked for.
     console.log("[render]", JSON.stringify({ view, wallIndex, dims, roomImage: !!roomImage, fromRoomCut: view === "wall" && !roomImage, guided, rerender: !!concept, extraPhotos: extras.length, finish, plan: plan && plan.walls.map(planWallText), spec }));
