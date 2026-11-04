@@ -13,7 +13,10 @@ export async function POST(request) {
       `Phone:    ${lead.phone || "-"}\n` +
       `Suburb:   ${lead.suburb || "-"}\n` +
       `Features: ${(lead.spec || []).join(", ") || "-"}\n` +
-      `Notes:    ${lead.notes || "-"}\n`;
+      `Notes:    ${lead.notes || "-"}\n` +
+      (Array.isArray(lead.layout) && lead.layout.length
+        ? `\nLayout plan${lead.ceiling ? ` (ceiling ${lead.ceiling}mm)` : ""}${lead.finish ? `, ${lead.finish}` : ""}:\n${lead.layout.map((l) => `- ${l}`).join("\n")}\n`
+        : "");
 
     if (process.env.RESEND_API_KEY && process.env.LEAD_TO_EMAIL) {
       // NOTE: the rendered image + original photo are base64 and large — store them in

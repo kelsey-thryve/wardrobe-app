@@ -74,7 +74,8 @@ const SCALE_RULE =
   "sections that would not fit. Never mirror or flip a photo: windows, doors and corners " +
   "stay on the same side as in the photo.\n\n";
 
-function sizeLine(width, ceiling, depth) {
+// planned: the layout already gives the sections, so don't suggest a split of our own.
+function sizeLine(width, ceiling, depth, planned = false) {
   const w = validMm(width), h = validMm(ceiling), d = validMm(depth);
   if (!w && !h && !d) return SCALE_RULE;
   const facts = [
@@ -85,7 +86,7 @@ function sizeLine(width, ceiling, depth) {
   // A typical wardrobe section is 450-900mm wide; give the model a sensible split to draw.
   const bays = w ? Math.max(1, Math.round(w / 800)) : 0;
   const fit = [
-    w && `split the wall into ${bays} section${bays > 1 ? "s" : ""} of about ${mm(w / bays)} each`,
+    w && !planned && `split the wall into ${bays} section${bays > 1 ? "s" : ""} of about ${mm(w / bays)} each`,
     h && `run the joinery up to ${mm(h)}`,
     "hanging sections are about 600mm deep",
     d && `leave the rest of the ${mm(d)} depth as clear floor`,
@@ -324,20 +325,39 @@ const SECTION_LIST =
 
 // Walk-in mode: one exact layout plan for the whole room, from the brief, chat, photos and
 // measurements. Returns { finish, spec, plan } (plan normalised by lib/plan.js).
-async function planLayout(key, brief, messages, images, dims, rules = "") {
+function singlePlanPrompt(rules) {
+  return (
+    "You are the lead designer at a fitted-wardrobe joinery studio. Image 1 shows the wall, " +
+    "alcove or cupboard where the customer's wardrobe will go; any other images show it from " +
+    "other angles. Design the fitted wardrobe and return ONLY JSON:\n" +
+    '{"finish": "<timber or colour, e.g. light oak timber veneer>", "colour": "<hex of ' +
+    'that finish>", "spec": "<one plain paragraph describing the finished design>", ' +
+    '"walls": [{"name": "Wardrobe", "width": <mm>, "sections": [{"type": "<type>", "width": <mm>}]}]}\n' +
+    "Return exactly one wall: the wardrobe run as you face it in image 1, edge to edge. Sections " +
+    `run left to right and their widths add up to the wardrobe width. Section types: ${SECTION_LIST}. ` +
+    "Use the customer's measurements exactly where given; otherwise estimate from the photos. " +
+    "Typical widths: hanging 600-1000mm, drawers 450-900mm, shelves 300-900mm. Follow the brief " +
+    "and the customer's latest choices in the conversation." +
+    (rules ? `\n\nFollow these product and design rules:\n${rules}` : "")
+  );
+}
+
+// single: a reach-in or one-wall wardrobe, planned as a single run of sections (no outlines).
+async function planLayout(key, brief, messages, images, dims, rules = "", single = false) {
   const transcript = messages
     .map((m) => `${m.role === "user" ? "Customer" : "Designer"}: ${m.content}`)
     .join("\n");
   const widths = Array.isArray(dims.widths) ? dims.widths.map(Number) : [];
-  const known = ["left", "back", "right"]
-    .map((n, i) => (validMm(widths[i]) ? `${n} wall ${mm(widths[i])} wide` : null)).filter(Boolean);
+  const known = single
+    ? [validMm(widths[0]) && `wardrobe wall ${mm(widths[0])} wide`].filter(Boolean)
+    : ["left", "back", "right"].map((n, i) => (validMm(widths[i]) ? `${n} wall ${mm(widths[i])} wide` : null)).filter(Boolean);
   const facts = [...known, validMm(Number(dims.ceiling)) && `ceiling ${mm(Number(dims.ceiling))}`,
     validMm(Number(dims.depth)) && `room depth ${mm(Number(dims.depth))}`].filter(Boolean);
   try {
     const { ok, text } = await askText(key, {
       systemInstruction: {
         parts: [{
-          text:
+          text: single ? singlePlanPrompt(rules) :
             "You are the lead designer at a fitted-wardrobe joinery studio. Image 1 shows the " +
             "customer's walk-in room from the doorway; any other images are close-ups of it. " +
             "Design the fitted wardrobe and return ONLY JSON:\n" +
@@ -443,6 +463,7 @@ export async function POST(request) {
 
     if (planOnly) {
       const images = [imageBase64, ...extraImages].filter(Boolean);
+      if (kind !== "walk-in") return Response.json(await planLayout(key, brief, messages, images, dims, rules, true));
       // The wall corners come from their own focused call, run alongside the design.
       const [out, corners] = await Promise.all([planLayout(key, brief, messages, images, dims, rules), findWalls(key, images[0])]);
       if (out.plan) {
@@ -460,7 +481,9 @@ export async function POST(request) {
 
     // Always render from the room photo; a previous render only guides the layout.
     const walkIn = view === "wide" || view === "wall";
-    const plan = walkIn ? normalisePlan(givenPlan, { widths: dims.widths, ceiling: dims.ceiling }) : null;
+    const plan = walkIn || givenPlan ? normalisePlan(givenPlan, { widths: dims.widths, ceiling: dims.ceiling }) : null;
+    // A single-wall render follows its plan too, section by section.
+    const layout = !walkIn && plan?.walls[0] ? `LAYOUT (follow exactly, left to right across the wardrobe): ${planWallText(plan.walls[0])}.\n\n` : "";
     if (view === "wall" && !plan?.walls[wallIndex]) return Response.json({ error: "Missing layout plan" }, { status: 400 });
     const guided = view === "wide" && !!layoutGuide;
     const extras = view === "wall" || guided ? [] : extraImages.slice(0, view === "match" ? MAX_EXTRA_PHOTOS : MAX_WALL_PHOTOS - 1);
@@ -479,8 +502,8 @@ export async function POST(request) {
       view === "wall" && !roomImage ? buildWallCutPrompt(spec, finish, plan, wallIndex, !!planDrawing, sizeLine(plan.walls[wallIndex].width, ceiling, depth))
       : view === "wall" ? buildWallPrompt(spec, finish, plan, wallIndex, !!roomImage, sizeLine(plan.walls[wallIndex].width, ceiling, depth))
       : view === "wide" ? buildRoomPrompt(spec, finish, plan, extras.length, concept, roomSize, guided)
-      : baseRender ? buildRerenderPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth))
-      : buildPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth));
+      : baseRender ? buildRerenderPrompt(spec, finish, extras.length, layout + sizeLine(widths[0], ceiling, depth, !!layout))
+      : buildPrompt(spec, finish, extras.length, layout + sizeLine(widths[0], ceiling, depth, !!layout));
     const ruled = rules ? `${prompt}\n\nPRODUCT RULES (the wardrobe must be this product):\n${rules}` : prompt;
     parts.push({ text: insist ? INSIST + ruled : ruled });
 

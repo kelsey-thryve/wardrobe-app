@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import Elevation from "./Elevation";
 import { drawUnwarped, drawWarped } from "../lib/warp";
 import { getBrand } from "../lib/brands";
+import { planWallText } from "../lib/plan";
 
 const MAX_PHOTOS = 5;
 const RENDER_EXTRA_PHOTOS = 2; // extra views sent with a render; keeps the request under the host's size limit
@@ -238,7 +239,7 @@ export default function Designer({ brand: brandKey = "thryve", Logo, Footer }) {
 
   // Walk-in views: the room view, each wall face-on, and the to-scale plan drawings.
   const wallIds = plan ? faceOnWalls(plan.walls) : ["w0", "w2"];
-  const viewIds = walkIn ? ["wide", ...wallIds, "plan"] : ["main"];
+  const viewIds = walkIn ? ["wide", ...wallIds, "plan"] : ["main", "plan"];
   const viewLabel = (id) =>
     id === "wide" ? "Room view" : id === "main" ? "Your render" : id === "plan" ? "Plan"
       : plan?.walls[Number(id.slice(1))]?.name || WALL_NAMES[Number(id.slice(1))];
@@ -289,7 +290,26 @@ export default function Designer({ brand: brandKey = "thryve", Logo, Footer }) {
 
   const runRender = async () => {
     if (!walkIn) {
-      await renderView("main", { imageBase64: photo, extraImages: photos.slice(1, 1 + RENDER_EXTRA_PHOTOS) });
+      // 1. The layout plan for the wardrobe run, then 2. the render, which follows it.
+      setViews((v) => ({ ...v, plan: { loading: true, err: null } }));
+      let shared = {};
+      try {
+        const small = await Promise.all(photos.map((p) => shrink(p, 768, 0.75)));
+        const res = await fetch("/api/render", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ planOnly: true, brand: brand.key, range, door: doorInfo?.id, kind: "reach-in", imageBase64: small[0], extraImages: small.slice(1), brief: fullBrief(), messages, dims: dims() }),
+        });
+        shared = await res.json();
+      } catch {}
+      const p = shared.plan || null;
+      setPlan(p);
+      setViews((v) => ({ ...v, plan: { loading: false, err: p ? null : "Couldn't work out the layout. Try re-rendering." } }));
+      await renderView("main", {
+        imageBase64: photo,
+        extraImages: photos.slice(1, 1 + RENDER_EXTRA_PHOTOS),
+        ...(p && { spec: shared.spec, finish: shared.finish, plan: p }),
+      });
       return;
     }
     setViews((v) => Object.fromEntries(viewIds.map((id) => [id, { ...v[id], loading: true, err: null }])));
@@ -393,7 +413,7 @@ export default function Designer({ brand: brandKey = "thryve", Logo, Footer }) {
     await fetch("/api/lead", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...lead, brand: brand.name, range: rangeInfo?.name, door: doorInfo?.name, kind, spec: [...picked, ...(brief.trim() ? [brief.trim()] : [])], notes: fullBrief() }),
+      body: JSON.stringify({ ...lead, brand: brand.name, range: rangeInfo?.name, door: doorInfo?.name, kind, layout: plan?.walls.map(planWallText), ceiling: plan?.ceiling, finish: plan?.finish, spec: [...picked, ...(brief.trim() ? [brief.trim()] : [])], notes: fullBrief() }),
     });
     setStage("done");
   };
@@ -548,8 +568,8 @@ export default function Designer({ brand: brandKey = "thryve", Logo, Footer }) {
             <div className="panel grid">
               <div className="col">
                 <div className="stepnum">Your space, reimagined</div>
-                <div className="steph">{walkIn ? "Your renders" : "Your render"}</div>
-                {walkIn && (
+                <div className="steph">{walkIn ? "Your renders" : "Your design"}</div>
+                {(
                   <div className="viewtabs">
                     {viewIds.map((id) => (
                       <button key={id} className={"vtab" + (active === id ? " on" : "")} onClick={() => setActive(id)}>
