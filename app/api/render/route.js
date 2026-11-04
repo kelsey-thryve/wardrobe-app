@@ -115,6 +115,7 @@ function buildPrompt(spec, finish, extras = 0, size = SCALE_RULE) {
     "CRITICAL: preserve the room's real geometry, perspective, wall positions, window and " +
     "door placement, flooring and natural lighting exactly as photographed — do not restyle " +
     "the room or move anything. Only add the wardrobe joinery, seamlessly integrated and " +
+    "clearly visible (returning image 1 unchanged is a failure), " +
     "correctly scaled to the space, with realistic shadows and materials.\n\n" +
     extraLine(extras) +
     size +
@@ -176,6 +177,12 @@ function buildRoomPrompt(spec, finish, plan, closeups, hasConcept, size = SCALE_
   );
 }
 
+// Sent when a render came back as the untouched photo.
+const INSIST =
+  "IMPORTANT: your last attempt returned the room photo unchanged, which is a failure. The " +
+  "image you return MUST show the new fitted wardrobe clearly built into the room, so it " +
+  "looks visibly different from image 1.\n\n";
+
 // With a layout guide (image 2: the photo with each wall's plan drawing warped onto it), the
 // room view has to follow the same plan the wall views are drawn from.
 function buildGuidedRoomPrompt(spec, finish, plan, hasConcept, size) {
@@ -188,8 +195,9 @@ function buildGuidedRoomPrompt(spec, finish, plan, hasConcept, size) {
     "and heights, with the shelves, hanging rails, drawers, windows and doors exactly where " +
     "image 2 shows them. Do not add, remove or rearrange sections. Image 2 is only a diagram: " +
     "use real materials, depth, shadows and lighting, not its flat drawing style. Replace any " +
-    "existing shelving with this design. Keep the room's real geometry, perspective, windows, " +
-    "doors, ceiling, flooring and light exactly as photographed. " +
+    "existing shelving with this design. The result MUST clearly show the new fitted wardrobe; " +
+    "returning image 1 unchanged is a failure. Keep the room's real geometry, perspective, " +
+    "windows, doors, ceiling, flooring and light exactly as photographed. " +
     (hasConcept ? "Image 3 is an earlier render of this view: use it only for the look; image 2 " +
       "wins on layout. " : "") +
     "\n\n" +
@@ -422,7 +430,7 @@ export async function POST(request) {
       imageBase64, extraImages = [], mimeType = "image/jpeg", brief = "", messages = [], baseRender,
       // Walk-in mode: "planOnly" returns the shared plan; "wide" and "wall" render from it.
       planOnly = false, view = "match", wallIndex = 0, spec: givenSpec, finish: givenFinish, plan: givenPlan,
-      dims = {}, roomImage, layoutGuide, planDrawing,
+      dims = {}, roomImage, layoutGuide, planDrawing, insist = false,
     } = await request.json();
 
     const key = process.env.GEMINI_API_KEY;
@@ -468,10 +476,10 @@ export async function POST(request) {
       : view === "wide" ? buildRoomPrompt(spec, finish, plan, extras.length, concept, roomSize, guided)
       : baseRender ? buildRerenderPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth))
       : buildPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth));
-    parts.push({ text: prompt });
+    parts.push({ text: insist ? INSIST + prompt : prompt });
 
     // Visible in the host's function logs, to check what the image model was asked for.
-    console.log("[render]", JSON.stringify({ view, wallIndex, dims, roomImage: !!roomImage, fromRoomCut: view === "wall" && !roomImage, guided, rerender: !!concept, extraPhotos: extras.length, finish, plan: plan && plan.walls.map(planWallText), spec }));
+    console.log("[render]", JSON.stringify({ view, wallIndex, insist, dims, roomImage: !!roomImage, fromRoomCut: view === "wall" && !roomImage, guided, rerender: !!concept, extraPhotos: extras.length, finish, plan: plan && plan.walls.map(planWallText), spec }));
 
     const attempts = [MODEL, MODEL, ...FALLBACK_MODELS.filter((m) => m !== MODEL)];
     // Wall renders take the wall's own shape (width to ceiling height).

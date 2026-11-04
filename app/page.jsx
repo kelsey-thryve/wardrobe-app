@@ -69,6 +69,24 @@ const loadImage = (src) =>
     img.src = src;
   });
 
+// True when two images are near enough the same picture (compared as tiny thumbnails), to
+// catch a render that came back as the untouched photo.
+const looksSame = async (a, b) => {
+  const [x, y] = await Promise.all([loadImage(a), loadImage(b)]);
+  if (!x || !y) return false;
+  const px = (img) => {
+    const c = document.createElement("canvas");
+    c.width = c.height = 24;
+    const g = c.getContext("2d");
+    g.drawImage(img, 0, 0, 24, 24);
+    return g.getImageData(0, 0, 24, 24).data;
+  };
+  const p = px(x), q = px(y);
+  let d = 0;
+  for (let i = 0; i < p.length; i += 4) d += Math.abs(p[i] - q[i]) + Math.abs(p[i + 1] - q[i + 1]) + Math.abs(p[i + 2] - q[i + 2]);
+  return d / (24 * 24 * 3) < 6;
+};
+
 // The layout guide for the room view: the overview photo with each wall's plan drawing warped
 // onto that wall (at the corners the planner found), so the room view follows the same plan.
 const layoutGuide = async (photoSrc, plan) => {
@@ -231,19 +249,30 @@ export default function Page() {
     let err = null;
     try {
       const prev = views[id]?.img;
-      const res = await fetch("/api/render", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mimeType: "image/jpeg",
-          brief: fullBrief(),
-          messages,
-          dims: dims(),
-          baseRender: prev ? await shrink(prev, 1024, 0.8) : undefined,
-          ...body,
-        }),
-      });
-      const data = await res.json();
+      const ask = async (extra) => {
+        const res = await fetch("/api/render", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mimeType: "image/jpeg",
+            brief: fullBrief(),
+            messages,
+            dims: dims(),
+            baseRender: prev ? await shrink(prev, 1024, 0.8) : undefined,
+            ...body,
+            ...extra,
+          }),
+        });
+        return res.json();
+      };
+      let data = await ask();
+      // The image model sometimes hands the room photo back untouched. Ask once more, firmly.
+      if (data.imageBase64 && (id === "main" || id === "wide") && (await looksSame(data.imageBase64, body.imageBase64))) {
+        const again = await ask({ insist: true });
+        data = again.imageBase64 && !(await looksSame(again.imageBase64, body.imageBase64))
+          ? again
+          : { error: "The designer returned your photo unchanged. Please try again." };
+      }
       if (data.imageBase64) img = data.imageBase64;
       else err = data.error || "Render failed. Try again.";
     } catch {
