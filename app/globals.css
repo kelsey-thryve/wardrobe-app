@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Instrument+Sans:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Instrument+Sans:wght@400;500;600&family=Lato:wght@300;400;700&display=swap');
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -6,18 +6,19 @@ html, body { margin: 0; padding: 0; }
 .wrap {
   --ink:#2A1B24; --paper:#F4EFEA; --card:#FBF8F5; --brass:#A9803F;
   --brand:#56123D; --brand-dark:#420E2E; --walnut:#7E5230; --line:#E7DDD4; --muted:#6E6058;
-  font-family:'Instrument Sans', system-ui, sans-serif;
+  --display:'Fraunces',serif; --body:'Instrument Sans',system-ui,sans-serif;
+  font-family:var(--body);
   color:var(--ink); background:var(--paper);
   min-height:100vh; width:100%; line-height:1.5;
   -webkit-font-smoothing:antialiased;
 }
 .inner { max-width:1080px; margin:0 auto; padding:22px 20px 60px; }
-.topbar { display:flex; align-items:center; justify-content:space-between; padding-bottom:26px; }
-.logo-text { font-family:'Fraunces',serif; font-weight:600; font-size:30px; color:var(--brand); letter-spacing:.005em; }
+.topbar-in { max-width:1080px; margin:0 auto; padding:22px 20px 4px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.logo-text { font-family:var(--display); font-weight:600; font-size:30px; color:var(--brand); letter-spacing:.005em; }
 .topbar .tag { font-size:12.5px; color:var(--muted); }
 
 .hero h1 {
-  font-family:'Fraunces', serif; font-weight:500;
+  font-family:var(--display); font-weight:500;
   font-size:clamp(32px, 6vw, 54px); line-height:1.03; letter-spacing:-.01em;
   margin:2px 0 14px; max-width:16ch;
 }
@@ -31,8 +32,8 @@ html, body { margin: 0; padding: 0; }
 .col + .col { border-left:1px solid var(--line); }
 @media (max-width:760px){ .col + .col { border-left:none; border-top:1px solid var(--line); } }
 
-.stepnum { font-family:'Fraunces',serif; color:var(--brass); font-size:14px; }
-.steph { font-family:'Fraunces',serif; font-size:20px; font-weight:500; margin:2px 0 12px; }
+.stepnum { font-family:var(--display); color:var(--brass); font-size:14px; }
+.steph { font-family:var(--display); font-size:20px; font-weight:500; margin:2px 0 12px; }
 
 .drop {
   border:1.5px dashed var(--line); border-radius:3px; background:#EFE9DE;
@@ -42,7 +43,7 @@ html, body { margin: 0; padding: 0; }
 }
 .drop:hover { border-color:var(--brass); }
 .drop img { width:100%; height:100%; object-fit:cover; }
-.drop .ico { font-family:'Fraunces',serif; font-size:26px; color:var(--walnut); }
+.drop .ico { font-family:var(--display); font-size:26px; color:var(--walnut); }
 
 textarea {
   width:100%; min-height:96px; resize:vertical; border:1px solid var(--line);
@@ -94,8 +95,8 @@ textarea:focus, input:focus { outline:none; border-color:var(--brass); }
 input.field { width:100%; border:1px solid var(--line); background:#FBF8F2; border-radius:3px; padding:11px 12px; font:inherit; margin-bottom:10px; }
 
 .done { text-align:center; padding:40px 22px; }
-.done .tick { font-family:'Fraunces',serif; font-size:34px; color:var(--brass); }
-.done h2 { font-family:'Fraunces',serif; font-weight:500; font-size:26px; margin:8px 0 8px; }
+.done .tick { font-family:var(--display); font-size:34px; color:var(--brass); }
+.done h2 { font-family:var(--display); font-weight:500; font-size:26px; margin:8px 0 8px; }
 .package { text-align:left; background:#EFE9DE; border:1px solid var(--line); border-radius:3px; padding:16px; margin:18px auto 0; max-width:460px; }
 .package .k { font-size:12px; color:var(--muted); }
 .package .v { font-size:14px; margin:0 0 10px; }
@@ -131,3 +132,49 @@ input.field { width:100%; border:1px solid var(--line); background:#FBF8F2; bord
 .planview h4 { margin:0 0 6px; font-size:14px; font-weight:600; }
 .planview .note { font-size:12px; color:var(--muted); margin:0; }
 .render.fit:has(> img) { background:#EFE9DE; }
+
+/* First step for brands with ranges: what kind of wardrobe, which range, which doors. */
+.choose { padding:24px; }
+.options { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:10px; }
+.options.two { grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); }
+.option { text-align:left; display:flex; flex-direction:column; gap:3px; padding:14px; border:1px solid var(--line);
+  border-radius:3px; background:#fff; color:var(--ink); font:inherit; cursor:pointer; }
+.option:hover { border-color:var(--brand); }
+.option.on { border-color:var(--brand); box-shadow:inset 0 0 0 1px var(--brand); background:var(--tint, #F6EEF2); }
+.option .oname { font-family:var(--display); font-size:17px; color:var(--brand); }
+.option .oblurb { font-size:13px; color:var(--muted); line-height:1.4; }
+.choose .cta { margin-top:22px; }
+.chosen { margin:-4px 0 10px; color:var(--ink); }
+.link { background:none; border:none; padding:0; font:inherit; color:var(--brand); text-decoration:underline; cursor:pointer; }
+
+/* Boston Wardrobes: plum and blush, Lato Light, as in their brochures. */
+.brand-boston {
+  --display:'Lato',system-ui,sans-serif; --body:'Lato',system-ui,sans-serif;
+  --brand:#5D1439; --brand-dark:#470F2C; --brass:#5D1439; --walnut:#5D1439; --tint:#F9F0ED;
+  --ink:#2B2326; --paper:#FFFFFF; --card:#FFFFFF; --line:#E9DEDF; --muted:#6F6266;
+}
+.brand-boston .topbar { background:var(--brand); color:#fff; }
+.brand-boston .topbar-in { padding:18px 20px; }
+.brand-boston .topbar .tag { color:#fff; font-size:15px; font-weight:300; letter-spacing:.02em; }
+.brand-boston .inner { padding-top:30px; }
+.brand-boston .hero h1 { font-weight:300; color:var(--brand); letter-spacing:0; }
+.brand-boston .steph { font-weight:300; color:var(--brand); font-size:22px; }
+.brand-boston .stepnum { font-weight:400; font-size:12px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+.brand-boston .option .oname { font-weight:400; }
+.brand-boston .cta.brass { background:var(--brand); color:#fff; }
+.brand-boston .cta.brass:hover { background:var(--brand-dark); }
+.brand-boston .drop { background:var(--tint); }
+.brand-boston .msg.a { background:var(--tint); }
+.brand-boston .done .tick { color:var(--brand); }
+.brand-boston .package { background:var(--tint); border-color:var(--line); }
+.brand-boston .composer button { background:var(--brand); }
+.brand-boston .done h2 { font-weight:300; color:var(--brand); }
+.boston-logo { display:flex; align-items:center; gap:10px; color:#fff; text-decoration:none; }
+.boston-logo svg { height:46px; width:auto; }
+.boston-logo span { font-family:'Lato',sans-serif; font-weight:300; font-size:17px; line-height:1.05; letter-spacing:.01em; }
+.brand-boston .chip, .brand-boston textarea, .brand-boston input, .brand-boston .cta { font-family:var(--body); }
+.boston-footer { margin-top:10px; }
+.boston-footer .strap { background:var(--tint); text-align:center; font-style:italic; font-weight:300; color:var(--ink); padding:16px 20px; }
+.boston-footer .foot { max-width:1080px; margin:0 auto; padding:16px 20px 26px; display:flex; flex-wrap:wrap; gap:8px 20px;
+  align-items:baseline; justify-content:space-between; font-size:12.5px; color:var(--muted); }
+.boston-footer .foot a { color:var(--brand); font-size:22px; font-weight:300; text-decoration:none; }

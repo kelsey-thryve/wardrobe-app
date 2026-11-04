@@ -1,6 +1,7 @@
 // Server-side render: the browser NEVER sees the Gemini key.
 // Browser -> this route (holds key) -> Gemini image API -> image back.
 import { cleanOutline, normalisePlan, planWallText } from "../../../lib/plan";
+import { brandRules } from "../../../lib/brands";
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // renders can take 10-30s
@@ -323,7 +324,7 @@ const SECTION_LIST =
 
 // Walk-in mode: one exact layout plan for the whole room, from the brief, chat, photos and
 // measurements. Returns { finish, spec, plan } (plan normalised by lib/plan.js).
-async function planLayout(key, brief, messages, images, dims) {
+async function planLayout(key, brief, messages, images, dims, rules = "") {
   const transcript = messages
     .map((m) => `${m.role === "user" ? "Customer" : "Designer"}: ${m.content}`)
     .join("\n");
@@ -356,7 +357,8 @@ async function planLayout(key, brief, messages, images, dims) {
             "it meets the ceiling), top-right corner, bottom-right corner (where it meets the " +
             "floor), bottom-left corner. Left and right are as seen in image 1. A corner hidden " +
             "out of frame may lie a little outside 0 to 1. Be precise: the layout is drawn onto " +
-            "the photo at these corners.",
+            "the photo at these corners." +
+            (rules ? `\n\nFollow these product and design rules:\n${rules}` : ""),
         }],
       },
       contents: [{
@@ -431,15 +433,18 @@ export async function POST(request) {
       // Walk-in mode: "planOnly" returns the shared plan; "wide" and "wall" render from it.
       planOnly = false, view = "match", wallIndex = 0, spec: givenSpec, finish: givenFinish, plan: givenPlan,
       dims = {}, roomImage, layoutGuide, planDrawing, insist = false,
+      brand, range, kind, door,
     } = await request.json();
 
     const key = process.env.GEMINI_API_KEY;
     if (!key) return Response.json({ error: "Server not configured (GEMINI_API_KEY)" }, { status: 500 });
 
+    const rules = brandRules(brand, range, kind, door);
+
     if (planOnly) {
       const images = [imageBase64, ...extraImages].filter(Boolean);
       // The wall corners come from their own focused call, run alongside the design.
-      const [out, corners] = await Promise.all([planLayout(key, brief, messages, images, dims), findWalls(key, images[0])]);
+      const [out, corners] = await Promise.all([planLayout(key, brief, messages, images, dims, rules), findWalls(key, images[0])]);
       if (out.plan) {
         out.plan.walls = out.plan.walls.map((w) => ({ ...w, outline: corners[wallSide(w.name)] || w.outline }));
         console.log("[plan] outlines", JSON.stringify(out.plan.walls.map((w) => [w.name, w.outline])));
@@ -476,10 +481,11 @@ export async function POST(request) {
       : view === "wide" ? buildRoomPrompt(spec, finish, plan, extras.length, concept, roomSize, guided)
       : baseRender ? buildRerenderPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth))
       : buildPrompt(spec, finish, extras.length, sizeLine(widths[0], ceiling, depth));
-    parts.push({ text: insist ? INSIST + prompt : prompt });
+    const ruled = rules ? `${prompt}\n\nPRODUCT RULES (the wardrobe must be this product):\n${rules}` : prompt;
+    parts.push({ text: insist ? INSIST + ruled : ruled });
 
     // Visible in the host's function logs, to check what the image model was asked for.
-    console.log("[render]", JSON.stringify({ view, wallIndex, insist, dims, roomImage: !!roomImage, fromRoomCut: view === "wall" && !roomImage, guided, rerender: !!concept, extraPhotos: extras.length, finish, plan: plan && plan.walls.map(planWallText), spec }));
+    console.log("[render]", JSON.stringify({ view, wallIndex, insist, brand, range, kind, door, dims, roomImage: !!roomImage, fromRoomCut: view === "wall" && !roomImage, guided, rerender: !!concept, extraPhotos: extras.length, finish, plan: plan && plan.walls.map(planWallText), spec }));
 
     const attempts = [MODEL, MODEL, ...FALLBACK_MODELS.filter((m) => m !== MODEL)];
     // Wall renders take the wall's own shape (width to ceiling height).

@@ -6,7 +6,8 @@ export async function POST(request) {
   try {
     const lead = await request.json();
     const summary =
-      `New wardrobe quote request\n\n` +
+      `New wardrobe quote request${lead.brand ? ` (${lead.brand})` : ""}\n\n` +
+      (lead.kind ? `Wardrobe: ${lead.kind}${lead.range ? `, ${lead.range} range` : ""}${lead.door ? `, ${lead.door} doors` : ""}\n` : "") +
       `Name:     ${lead.name || "-"}\n` +
       `Email:    ${lead.email || "-"}\n` +
       `Phone:    ${lead.phone || "-"}\n` +
