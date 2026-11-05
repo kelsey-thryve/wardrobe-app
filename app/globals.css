@@ -142,6 +142,17 @@ input.field { width:100%; border:1px solid var(--line); background:#FBF8F2; bord
 .option:hover { border-color:var(--brand); }
 .option.on { border-color:var(--brand); box-shadow:inset 0 0 0 1px var(--brand); background:var(--tint, #F6EEF2); }
 .option .oname { font-family:var(--display); font-size:17px; color:var(--brand); }
+/* A photo on top of the card: full bleed, text padded below it. */
+.option:has(.oimg) { padding:0 0 14px; overflow:hidden; }
+.option .oimg { display:block; width:100%; aspect-ratio:16/10; object-fit:cover; margin-bottom:8px; background:var(--line); }
+.option:has(.oimg) .oname, .option:has(.oimg) .oblurb { padding:0 14px; }
+.option.on .oimg { outline:none; }
+@media (max-width:560px){
+  .options, .options.two { grid-template-columns:1fr 1fr; gap:8px; }
+  .option .oname { font-size:15px; }
+  .option .oblurb { font-size:12px; }
+  .option:has(.oimg) .oname, .option:has(.oimg) .oblurb { padding:0 10px; }
+}
 .option .oblurb { font-size:13px; color:var(--muted); line-height:1.4; }
 .choose .cta { margin-top:22px; }
 .chosen { margin:-4px 0 10px; color:var(--ink); }

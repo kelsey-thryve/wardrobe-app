@@ -443,6 +443,7 @@ export default function Designer({ brand: brandKey = "thryve", Logo, Footer }) {
             <div className="options two">
               {brand.kinds.map((k) => (
                 <button key={k.id} className={"option" + (kind === k.id ? " on" : "")} onClick={() => setKind(k.id)}>
+                  {k.img && <img className="oimg" src={k.img} alt="" loading="lazy" />}
                   <span className="oname">{k.name}</span>
                   <span className="oblurb">{k.blurb}</span>
                 </button>
@@ -452,6 +453,7 @@ export default function Designer({ brand: brandKey = "thryve", Logo, Footer }) {
             <div className="options">
               {brand.ranges.map((r) => (
                 <button key={r.id} className={"option" + (range === r.id ? " on" : "")} onClick={() => setRange(r.id)}>
+                  {r.img && <img className="oimg" src={r.img} alt="" loading="lazy" />}
                   <span className="oname">{r.name}</span>
                   <span className="oblurb">{r.blurb}</span>
                 </button>
@@ -463,7 +465,8 @@ export default function Designer({ brand: brandKey = "thryve", Logo, Footer }) {
                 <div className="options">
                   {brand.doors.map((d) => (
                     <button key={d.id} className={"option" + (door === d.id ? " on" : "")} onClick={() => setDoor(d.id)}>
-                      <span className="oname">{d.name}</span>
+                      {d.img && <img className="oimg" src={d.img} alt="" loading="lazy" />}
+                  <span className="oname">{d.name}</span>
                       <span className="oblurb">{d.blurb}</span>
                     </button>
                   ))}
