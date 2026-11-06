@@ -6,13 +6,17 @@ export async function POST(request) {
   try {
     const lead = await request.json();
     const summary =
-      `New wardrobe quote request\n\n` +
+      `New wardrobe quote request${lead.brand ? ` (${lead.brand})` : ""}\n\n` +
+      (lead.kind ? `Wardrobe: ${lead.kind}${lead.range ? `, ${lead.range} range` : ""}${lead.door ? `, ${lead.door} doors` : ""}\n` : "") +
       `Name:     ${lead.name || "-"}\n` +
       `Email:    ${lead.email || "-"}\n` +
       `Phone:    ${lead.phone || "-"}\n` +
       `Suburb:   ${lead.suburb || "-"}\n` +
       `Features: ${(lead.spec || []).join(", ") || "-"}\n` +
-      `Notes:    ${lead.notes || "-"}\n`;
+      `Notes:    ${lead.notes || "-"}\n` +
+      (Array.isArray(lead.layout) && lead.layout.length
+        ? `\nLayout plan${lead.ceiling ? ` (ceiling ${lead.ceiling}mm)` : ""}${lead.finish ? `, ${lead.finish}` : ""}:\n${lead.layout.map((l) => `- ${l}`).join("\n")}\n`
+        : "");
 
     if (process.env.RESEND_API_KEY && process.env.LEAD_TO_EMAIL) {
       // NOTE: the rendered image + original photo are base64 and large — store them in
